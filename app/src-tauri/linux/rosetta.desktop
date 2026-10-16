@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name={{name}}
+GenericName=PDF Çeviri Okuyucu
+Comment={{comment}}
+Exec={{exec}} %f
+Icon={{icon}}
+Terminal=false
+Categories=Education;Office;Viewer;
+MimeType=application/pdf;
+Keywords=pdf;translate;çeviri;okuyucu;english;
+StartupWMClass=rosetta

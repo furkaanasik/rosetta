@@ -25,7 +25,10 @@ rosetta job cancel 3                                  # çevrilen sayfalar cache
 - **Bütçe (`--budget`):** her batch'ten önce, o batch'in tahmini maliyeti işin kalan bütçesini aşacaksa iş durur (önce durur, sonra harcamaz). Ayrıca çağrı başı `claude_max_budget_usd` sınırı geçerlidir.
 - **Duraklat:** `rosetta job pause ID` (veya API) DB'de bir bayrak kaldırır; çalışan süreç her batch'ten önce bu bayrağa bakar. Çalışan terminalde **Ctrl-C** de aynı şeyi yapar (ikinci Ctrl-C hemen çıkar).
 - **Devam:** sadece kalan sayfalar planlanır; biten sayfalar cache'ten gelir, tekrar ödenmez.
-- **Hatalı sayfalar:** iş sonunda hatalı sayfa varsa durum `hatalı sayfa var`, çıkış kodu 3; `retry-failed` sadece onları yeniden dener.
+- **Hatalı sayfalar:** iş sonunda hatalı sayfa varsa durum `hatalı sayfa var`, çıkış kodu 3; `retry-failed` sadece onları yeniden dener — hiç başlamamış sayfalar varsa onlara dokunmaz (iş sonra `duraklatıldı` kalır, `resume` ile devam).
+- **Onaydan önce hiçbir şey değişmez:** `resume`/`retry-failed` reddedilirse (veya stdin terminal değilse) işin hatalı sayfaları ve duraklatma isteği olduğu gibi kalır. Eski bir duraklatma isteği ancak onaydan sonra temizlenir.
+- **İptal/duraklatma yarışı:** iş `çalışıyor` durumuna atomik geçer (`iptal` değilse ve bekleyen duraklatma isteği yoksa). Planlama sırasında gelen iptal ya da duraklatma işi hiç başlatmaz, sağlayıcı çağrılmaz; `iptal` hiçbir yolda üzerine yazılmaz.
+- **Fiyatı bilinmeyen model + bütçe:** tahmin yapılamadığı için bütçe önceden uygulanamaz (uyarı basılır); iş, sağlayıcının bildirdiği gerçek harcama bütçeye ulaşınca durur.
 
 ## Çıkış kodları
 
@@ -33,6 +36,6 @@ rosetta job cancel 3                                  # çevrilen sayfalar cache
 
 ## Motor arayüzü (API için)
 
-- `rosetta_engine.jobs.runner.JobRunner(service | None, repos)`: `create`, `plan` (AI yok), `run(job, plan, on_progress=, on_update=)`, `request_pause`, `cancel`, `reset_failed`, `get`.
+- `rosetta_engine.jobs.runner.JobRunner(service | None, repos)`: `create`, `plan` (AI yok), `run(job, plan, on_progress=, on_update=)` (başlayamazsa `JobNotStarted`), `prepare_continue` (onaydan sonra), `request_pause`, `cancel`, `reset_failed`, `get`.
 - `PageTranslationService.execute(..., should_stop=, budget_usd=, on_batch=)`: `should_stop()` True → `stop_kind="paused"`; `budget_usd` aşılacaksa `stop_kind="budget"`; `on_batch` her batch sonrası ara rapor alır.
 - `JobRepo` (`repos.jobs`): `create`, `get`, `list_jobs`, `update_progress`, `set_status`, `request_pause`, `pause_requested`, `clear_pause`.

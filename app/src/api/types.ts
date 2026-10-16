@@ -81,6 +81,8 @@ export interface Estimate {
   supports_profile: boolean;
   /** Seconds until the confirm token expires. */
   expires_in: number;
+  /** Things the user should know before confirming (e.g. a budget that can't be pre-applied). */
+  warnings?: string[];
 }
 
 export interface TranslateEstimateRequest {
@@ -241,6 +243,7 @@ export type ApiErrorKind =
   | "not_found"
   | "bad_request"
   | "expired_token"
+  | "conflict"
   | "unauthorized"
   | "internal";
 

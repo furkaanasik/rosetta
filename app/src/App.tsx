@@ -12,10 +12,11 @@ import { ProfileEditor } from "./components/ProfileEditor";
 import { Sidebar } from "./components/Sidebar";
 import { StatusBar } from "./components/StatusBar";
 import { TopBar } from "./components/TopBar";
-import { initialPdf, onOpenPdf, pdfSource, pickPdf } from "./lib/engineConnect";
+import { initialPdf, onEngineError, onOpenPdf, pdfSource, pickPdf } from "./lib/engineConnect";
 import { parsePageSpec, stopReasonText } from "./lib/format";
 import { loadPdf, outline, type OutlineItem, type PdfDoc } from "./lib/pdf";
 import { useConfirmed } from "./lib/useConfirmed";
+import { useModalFocus } from "./lib/useModalFocus";
 import { initialState, reducer, type SidePanel } from "./state";
 import { PdfPageView } from "./views/PdfPageView";
 import { SplitView } from "./views/SplitView";
@@ -27,16 +28,24 @@ const ERROR_TEXT: Partial<Record<EngineError["kind"], string>> = {
   budget: "Bütçe sınırı aşıldı — durdu.",
   unavailable: "Sağlayıcı/motor kullanılamıyor.",
   expired_token: "Onayın süresi doldu; tahmini yeniden alın.",
+  conflict: "Kitap dosyası kayıtlı yolda değişmiş; PDF'i yeniden açın.",
 };
 
 interface Props {
   api: EngineApi | null;
   mock: boolean;
+  /** Why the engine isn't available (start-up failure), shown in the status bar. */
+  engineError?: string | null;
   /** Test hook: skip PDF.js loading. */
   loadDocument?: (src: string | ArrayBuffer) => Promise<PdfDoc>;
 }
 
-export function App({ api, mock, loadDocument = loadPdf }: Props) {
+/** Frees a PDF.js document (worker-side data); test doubles may not implement it. */
+function releaseDoc(d: PdfDoc | null): void {
+  void (d as { destroy?: () => Promise<void> } | null)?.destroy?.()?.catch(() => undefined);
+}
+
+export function App({ api, mock, engineError = null, loadDocument = loadPdf }: Props) {
   const [state, dispatch] = useReducer(reducer, initialState);
   const [doc, setDoc] = useState<PdfDoc | null>(null);
   const [toc, setToc] = useState<OutlineItem[]>([]);
@@ -44,7 +53,10 @@ export function App({ api, mock, loadDocument = loadPdf }: Props) {
   const [message, setMessage] = useState<string | null>(null);
   const [lookup, setLookup] = useState<LookupTarget | null>(null);
   const [explanation, setExplanation] = useState<Explanation | null>(null);
+  const [engineDown, setEngineDown] = useState<string | null>(engineError);
   const msgTimer = useRef<number | undefined>(undefined);
+  const docRef = useRef<PdfDoc | null>(null);
+  const openSeq = useRef(0);
 
   const say = useCallback((m: string) => {
     setMessage(m);
@@ -69,27 +81,58 @@ export function App({ api, mock, loadDocument = loadPdf }: Props) {
 
   useEffect(refreshUsage, [refreshUsage, state.revision]);
 
+  // Engine crash/exit after start-up (Tauri).
+  useEffect(() => {
+    let cancelled = false;
+    let unlisten: (() => void) | undefined;
+    void onEngineError((m) => setEngineDown(m)).then((u) => {
+      if (cancelled) u();
+      else unlisten = u;
+    });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
+
+  const showDoc = useCallback((d: PdfDoc | null) => {
+    const old = docRef.current;
+    docRef.current = d;
+    setDoc(d);
+    if (old && old !== d) releaseDoc(old);
+  }, []);
+
+  useEffect(() => () => releaseDoc(docRef.current), []);
+
   const openPath = useCallback(async (path: string) => {
     if (!api) return;
+    // Latest open wins: a slower, older open (e.g. a hand-over during a load) never mixes its
+    // book with another file's document/TOC.
+    const seq = ++openSeq.current;
+    const stale = () => seq !== openSeq.current;
     try {
       const book = await api.openBook(path);
       const src = await pdfSource(path);
+      if (stale()) return;
       dispatch({ type: "bookOpened", book, pdfSrc: src });
       // In Tauri the file is loaded directly; in a plain browser (dev/E2E) it comes from the engine.
       const data = src ?? (await api.bookFile(book.id));
+      if (stale()) return;
       if (data) {
         const d = await loadDocument(data);
-        setDoc(d);
-        setToc(await outline(d));
+        if (stale()) return releaseDoc(d);
+        showDoc(d);
+        const items = await outline(d);
+        if (!stale()) setToc(items);
       } else {
-        setDoc(null);
+        showDoc(null);
         const t = await api.toc(book.id);
-        setToc(t.map((e) => ({ title: e.title, page: e.page, level: e.level })));
+        if (!stale()) setToc(t.map((e) => ({ title: e.title, page: e.page, level: e.level })));
       }
     } catch (e) {
-      onError(e);
+      if (!stale()) onError(e);
     }
-  }, [api, loadDocument, onError]);
+  }, [api, loadDocument, onError, showDoc]);
 
   const openBook = useCallback(async () => {
     if (!api) return;
@@ -101,19 +144,22 @@ export function App({ api, mock, loadDocument = loadPdf }: Props) {
     }
   }, [api, openPath, onError]);
 
-  // "Open with Rosetta" / `rosetta kitap.pdf`: the launch argument, then any later hand-overs.
+  // "Open with Rosetta" / `rosetta kitap.pdf`: the launch argument, then later hand-overs. The
+  // listener is registered first and the pending path drained after, so nothing is lost.
   useEffect(() => {
     if (!api) return;
     let cancelled = false;
     let unlisten: (() => void) | undefined;
-    void initialPdf()
-      .then((path) => {
-        if (path && !cancelled) void openPath(path);
-      })
-      .catch(onError);
-    void onOpenPdf((path) => void openPath(path)).then((u) => {
+    const drain = () =>
+      void initialPdf()
+        .then((path) => {
+          if (path && !cancelled) void openPath(path);
+        })
+        .catch(onError);
+    void onOpenPdf(drain).then((u) => {
       if (cancelled) u();
       else unlisten = u;
+      drain();
     });
     return () => {
       cancelled = true;
@@ -161,12 +207,13 @@ export function App({ api, mock, loadDocument = loadPdf }: Props) {
     }
   };
 
-  const analyze = () => {
+  const analyze = (onAnalyzed?: () => void) => {
     if (!api || bookId === null) return;
     void confirmed.request(
       () => api.estimateAnalyze(bookId),
       (t) => api.analyze(bookId, t),
       () => {
+        onAnalyzed?.();
         say("Kitap profili oluşturuldu.");
         dispatch({ type: "panel", panel: "profile" });
         afterAi();
@@ -205,6 +252,17 @@ export function App({ api, mock, loadDocument = loadPdf }: Props) {
       onError(e);
     }
   };
+
+  // Job progress: usage always; page views only when the visible page (or a whole job) changed.
+  const currentPage = useRef(state.page);
+  currentPage.current = state.page;
+  const onJobProgress = useCallback(
+    (done: number[], stopped: boolean) => {
+      refreshUsage();
+      if (stopped || done.includes(currentPage.current)) dispatch({ type: "refresh" });
+    },
+    [refreshUsage],
+  );
 
   const onWordClick = useCallback((word: string, sentence: string, blockKey: string | null) => {
     const w = word.trim();
@@ -259,7 +317,7 @@ export function App({ api, mock, loadDocument = loadPdf }: Props) {
             hasBook={bookId !== null}
             page={state.page}
             busy={confirmed.busy}
-            onAnalyze={analyze}
+            onAnalyze={() => analyze()}
             onTranslatePage={translatePage}
             onTranslateRange={translateRange}
             onTranslateAll={(budget) => startJob("all", budget)}
@@ -267,12 +325,12 @@ export function App({ api, mock, loadDocument = loadPdf }: Props) {
           />
         )}
         {state.panel === "jobs" && (
-          <JobsPanel api={api} bookId={bookId} refreshKey={state.revision} requestConfirmed={(e, r, d) => void confirmed.request(e, r, d)} onChange={afterAi} />
+          <JobsPanel api={api} bookId={bookId} refreshKey={state.revision} requestConfirmed={(e, r, d) => void confirmed.request(e, r, d)} onProgress={onJobProgress} onError={onError} />
         )}
         {state.panel === "profile" && <ProfileEditor api={api} bookId={bookId} refreshKey={state.revision} onAnalyze={analyze} onMessage={say} />}
         {state.panel === "learn" && <LearnPanel api={api} bookId={bookId} refreshKey={state.revision} onChange={afterAi} />}
       </aside>
-      <StatusBar connected={api !== null} mock={mock} usage={usage} message={message} />
+      <StatusBar connected={api !== null && engineDown === null} mock={mock} usage={usage} message={message} error={engineDown} />
       {lookup && api && (
         <LookupPopover
           api={api}
@@ -287,21 +345,28 @@ export function App({ api, mock, loadDocument = loadPdf }: Props) {
           }}
         />
       )}
-      {explanation && (
-        <div className="modal-backdrop" role="presentation" onClick={() => setExplanation(null)}>
-          <div className="modal" role="dialog" aria-modal="true" aria-label="Açıklama" onClick={(e) => e.stopPropagation()}>
-            <h2>Açıklama {explanation.cached && <span className="badge done">cache</span>}</h2>
-            <blockquote>{explanation.text}</blockquote>
-            <ExplanationText text={explanation.explanation} />
-            <div className="modal-actions">
-              <button type="button" onClick={() => setExplanation(null)}>Kapat</button>
-            </div>
-          </div>
-        </div>
-      )}
+      {explanation && <ExplanationDialog explanation={explanation} onClose={() => setExplanation(null)} />}
       {confirmed.pending && (
         <CostModal estimate={confirmed.pending.estimate} busy={confirmed.busy} onConfirm={() => void confirmed.confirm()} onCancel={confirmed.cancel} />
       )}
+    </div>
+  );
+}
+
+function ExplanationDialog({ explanation, onClose }: { explanation: Explanation; onClose: () => void }) {
+  const dialog = useRef<HTMLDivElement>(null);
+  const close = useRef<HTMLButtonElement>(null);
+  useModalFocus(dialog, onClose, close);
+  return (
+    <div className="modal-backdrop" role="presentation" onClick={onClose}>
+      <div ref={dialog} tabIndex={-1} className="modal" role="dialog" aria-modal="true" aria-label="Açıklama" onClick={(e) => e.stopPropagation()}>
+        <h2>Açıklama {explanation.cached && <span className="badge done">cache</span>}</h2>
+        <blockquote>{explanation.text}</blockquote>
+        <ExplanationText text={explanation.explanation} />
+        <div className="modal-actions">
+          <button ref={close} type="button" onClick={onClose}>Kapat</button>
+        </div>
+      </div>
     </div>
   );
 }

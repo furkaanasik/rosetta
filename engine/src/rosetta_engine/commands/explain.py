@@ -24,6 +24,7 @@ from rosetta_engine.explain.explainer import Explainer, normalize, render_text
 from rosetta_engine.models import BlockType
 from rosetta_engine.store.db import connect, migrate
 from rosetta_engine.store.repo import Repos
+from rosetta_engine.textsafe import strip_controls
 from rosetta_engine.translate.claude_cli import CLAUDE_BIN, complete
 from rosetta_engine.translate.fake import FakeTranslator
 from rosetta_engine.translate.service import PageTranslationService
@@ -96,12 +97,12 @@ def explain(
         try:
             plan = explainer.plan(sentence, context=context, book_id=book_id, lang=lang)
         except ValueError as ve:
-            cli.err.print(f"[red]Hata:[/] {escape(str(ve))}")
+            cli.err.print(f"[red]Hata:[/] {escape(strip_controls(str(ve)))}")
             raise typer.Exit(1) from ve
 
         if plan.cached is not None:
             cli.console.print(f"Cache'ten (claude-cli / {plan.model}) — AI çağrısı yok.")
-            cli.console.print(Markdown(render_text(plan.cached)))
+            cli.console.print(Markdown(strip_controls(render_text(plan.cached))))
             return
 
         if _which(CLAUDE_BIN) is None:
@@ -124,21 +125,21 @@ def explain(
         try:
             result = explainer.run(plan)
         except UsageLimitError as ex:
-            cli.err.print(f"[yellow]Kullanım limiti:[/] {escape(str(ex))}")
+            cli.err.print(f"[yellow]Kullanım limiti:[/] {escape(strip_controls(str(ex)))}")
             raise typer.Exit(cli.EXIT_USAGE_LIMIT) from ex
         except ProviderAuthError as ex:
-            cli.err.print(f"[red]Kimlik doğrulama:[/] {escape(str(ex))}")
+            cli.err.print(f"[red]Kimlik doğrulama:[/] {escape(strip_controls(str(ex)))}")
             raise typer.Exit(cli.EXIT_AUTH) from ex
         except BudgetExceededError as ex:
-            cli.err.print(f"[yellow]Bütçe sınırı aşıldı:[/] {escape(str(ex))}")
+            cli.err.print(f"[yellow]Bütçe sınırı aşıldı:[/] {escape(strip_controls(str(ex)))}")
             raise typer.Exit(cli.EXIT_BUDGET) from ex
         except ProviderUnavailableError as ex:
-            cli.err.print(f"[red]Sağlayıcı kullanılamıyor:[/] {escape(str(ex))}")
+            cli.err.print(f"[red]Sağlayıcı kullanılamıyor:[/] {escape(strip_controls(str(ex)))}")
             raise typer.Exit(cli.EXIT_UNAVAILABLE) from ex
         except ProviderError as ex:
-            cli.err.print(f"[red]Açıklama alınamadı:[/] {escape(str(ex))}")
+            cli.err.print(f"[red]Açıklama alınamadı:[/] {escape(strip_controls(str(ex)))}")
             raise typer.Exit(1) from ex
-        cli.console.print(Markdown(render_text(result)))
+        cli.console.print(Markdown(strip_controls(render_text(result))))
     finally:
         conn.close()
 

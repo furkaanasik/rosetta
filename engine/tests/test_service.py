@@ -492,3 +492,37 @@ def test_scanned_page_in_range_does_not_abort(
     assert report.done_pages == [0, 2]
     assert report.failed_pages == {1: NO_TEXT_REASON}
     assert fake.calls
+
+
+def test_batch_cached_meanwhile_is_not_paid_again(repos: Repos, book_pdf: Path) -> None:
+    """A concurrent run fills the cache for batch 2 while batch 1 runs → no second call."""
+    from rosetta_engine.store.repo import TranslationRow
+
+    svc, fake = _service(repos, batch_max_pages=1)
+    plan = _plan(svc, book_pdf, [0, 1])
+    assert len(plan.batches) == 2
+    second = plan.batches[1].blocks
+
+    def concurrent_run(_report: Any) -> None:
+        repos.translations.put_rows(
+            [
+                TranslationRow(
+                    book_id=plan.book.id,
+                    page_no=b.page_no,
+                    text_hash=b.text_hash,
+                    lang="tr",
+                    provider="fake",
+                    model="fake",
+                    text="başka süreç",
+                    sentences=["başka süreç"],
+                    sentence_aligned=True,
+                    prompt_version=1,
+                )
+                for b in second
+            ]
+        )
+
+    report = svc.execute(plan, on_batch=concurrent_run)
+
+    assert len(fake.calls) == 1
+    assert report.done_pages == [0, 1]

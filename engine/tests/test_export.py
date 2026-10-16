@@ -357,6 +357,72 @@ def test_export_without_translations_is_an_error(
     doc.close()
 
 
+def test_export_refuses_to_overwrite_a_source_pdf(
+    repos: Repos, book_pdf: Path, tmp_path: Path
+) -> None:
+    svc, book, doc, meta = _translated(repos, book_pdf)
+    before = book_pdf.read_bytes()
+    printed: list[str] = []
+
+    def never(argv: Sequence[str], timeout_s: float) -> PrintRun:
+        printed.append("x")
+        return PrintRun(0, "")
+
+    with pytest.raises(ExportError, match="kaynak PDF"):
+        export_book(
+            book, doc, meta.toc, repos, lambda ps: svc.ensure_pages(book, doc, meta, ps),
+            ExportOptions(provider="fake", model="fake"), book_pdf, tmp_path / "work",
+            browser=Path("/bin/chromium"), runner=never,
+        )  # fmt: skip
+    doc.close()
+
+    assert book_pdf.read_bytes() == before
+    assert printed == []
+
+
+def test_failed_export_keeps_the_previous_output(
+    repos: Repos, book_pdf: Path, tmp_path: Path
+) -> None:
+    svc, book, doc, meta = _translated(repos, book_pdf)
+    out = tmp_path / "out.pdf"
+    out.write_bytes(b"%PDF-1.7 previous export")
+
+    def broken(argv: Sequence[str], timeout_s: float) -> PrintRun:
+        return PrintRun(1, "crash")
+
+    with pytest.raises(ExportError):
+        export_book(
+            book, doc, meta.toc, repos, lambda ps: svc.ensure_pages(book, doc, meta, ps),
+            ExportOptions(provider="fake", model="fake", toc_page=False), out, tmp_path / "w",
+            browser=Path("/bin/chromium"), runner=broken,
+        )  # fmt: skip
+    doc.close()
+
+    assert out.read_bytes() == b"%PDF-1.7 previous export"
+    assert [p.name for p in tmp_path.glob(".out.*.tmp.pdf")] == []
+
+
+def test_run_print_timeout_kills_the_whole_process_group(tmp_path: Path) -> None:
+    marker = tmp_path / "child.pid"
+    script = f"sleep 30 & echo $! > {marker}; wait"
+
+    with pytest.raises(ExportError, match="içinde bitmedi"):
+        chromium.run_print(["sh", "-c", script], 0.5)
+
+    child = int(marker.read_text().strip())
+    import os
+    import time
+
+    for _ in range(50):
+        try:
+            os.kill(child, 0)
+        except ProcessLookupError:
+            break
+        time.sleep(0.02)
+    else:
+        pytest.fail("grandchild survived the timeout")
+
+
 # --- CLI -------------------------------------------------------------------------------------
 
 runner = CliRunner()
@@ -384,7 +450,7 @@ def test_cli_export_after_fake_translate(isolated: Path, book_pdf: Path) -> None
         cli.app, ["translate", str(book_pdf), "--pages", "1", "--provider", "fake", "--yes"]
     )
     assert tr.exit_code == 0, tr.output
-    out = isolated / "book.pdf"
+    out = isolated / "book.en-tr.pdf"
 
     result = runner.invoke(
         cli.app,
@@ -396,3 +462,29 @@ def test_cli_export_after_fake_translate(isolated: Path, book_pdf: Path) -> None
     assert out.is_file()
     assert "Yer imleri: 1" in result.output
     assert (config.data_dir() / "out").is_dir()
+
+
+@pytest.mark.parametrize(
+    ("args", "key"),
+    [
+        (["--provider", "deepl"], ("deepl", "deepl")),
+        (["--provider", "ollama", "--model", "qwen2.5:7b"], ("ollama", "ollama/qwen2.5:7b")),
+        (["--provider", "fake"], ("fake", "fake")),
+    ],
+)
+def test_cli_export_uses_the_providers_cache_key(
+    isolated: Path, book_pdf: Path, monkeypatch: pytest.MonkeyPatch, args: list[str], key: Any
+) -> None:
+    from rosetta_engine.export import exporter
+
+    seen: list[ExportOptions] = []
+
+    def capture(*a: Any, **kw: Any) -> Any:
+        seen.append(a[5])
+        raise ExportError("stop here")
+
+    monkeypatch.setattr(exporter, "export_book", capture)
+
+    runner.invoke(cli.app, ["export", str(book_pdf), *args])
+
+    assert (seen[0].provider, seen[0].model) == key

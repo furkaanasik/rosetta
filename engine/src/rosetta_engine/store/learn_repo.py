@@ -70,6 +70,11 @@ def _review(r: sqlite3.Row) -> ReviewRow:
     )
 
 
+def like_escape(text: str) -> str:
+    """Escape LIKE wildcards so user text matches literally (used with ``ESCAPE '\\'``)."""
+    return text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 class VocabRepo:
     def __init__(self, conn: sqlite3.Connection, clock: Clock = utc_now) -> None:
         self._c = conn
@@ -88,14 +93,16 @@ class VocabRepo:
         meaning: str = "",
         unknown: bool = True,
     ) -> tuple[VocabRow, bool]:
-        """Insert a lemma; an existing lemma is returned unchanged (``created`` False)."""
-        existing = self.by_lemma(lemma)
-        if existing is not None:
-            return existing, False
+        """Insert a lemma; an existing lemma is returned unchanged (``created`` False).
+
+        Race-safe: ``INSERT … ON CONFLICT(lemma) DO NOTHING`` instead of check-then-insert."""
+        if not lemma.strip() or not word.strip():
+            raise ValueError("boş kelime kaydedilemez")
         with self._c:
             cur = self._c.execute(
                 "INSERT INTO vocab(word, lemma, sentence, book_id, page_no, block_ord, text_hash,"
-                " meaning, unknown, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " meaning, unknown, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                " ON CONFLICT(lemma) DO NOTHING",
                 (
                     word,
                     lemma,
@@ -109,9 +116,9 @@ class VocabRepo:
                     self._clock().isoformat(),
                 ),
             )
-        row = self.get(int(cur.lastrowid or 0))
+        row = self.by_lemma(lemma)
         assert row is not None
-        return row, True
+        return row, cur.rowcount == 1
 
     def get(self, vocab_id: int) -> VocabRow | None:
         r = self._c.execute("SELECT * FROM vocab WHERE id = ?", (vocab_id,)).fetchone()
@@ -130,8 +137,11 @@ class VocabRepo:
             sql += " AND book_id = ?"
             args.append(book_id)
         if search:
-            sql += " AND (word LIKE ? OR lemma LIKE ? OR meaning LIKE ? OR sentence LIKE ?)"
-            args += [f"%{search}%"] * 4
+            sql += (
+                " AND (word LIKE ? ESCAPE '\\' OR lemma LIKE ? ESCAPE '\\'"
+                " OR meaning LIKE ? ESCAPE '\\' OR sentence LIKE ? ESCAPE '\\')"
+            )
+            args += [f"%{like_escape(search)}%"] * 4
         if since:
             sql += " AND created_at >= ?"
             args.append(since)
@@ -169,9 +179,9 @@ class VocabRepo:
         """First extracted block of the book containing ``term``: (page_no, ord, hash, text)."""
         r = self._c.execute(
             "SELECT page_no, ord, text_hash, text FROM blocks WHERE book_id = ? AND type IN"
-            " ('paragraph','list_item','heading','caption','footnote') AND text LIKE ?"
-            " ORDER BY page_no, ord LIMIT 1",
-            (book_id, f"%{term}%"),
+            " ('paragraph','list_item','heading','caption','footnote')"
+            " AND text LIKE ? ESCAPE '\\' ORDER BY page_no, ord LIMIT 1",
+            (book_id, f"%{like_escape(term)}%"),
         ).fetchone()
         if r is None:
             return None
@@ -242,7 +252,11 @@ class ReviewRepo:
             )
 
     def due(self, now: datetime, limit: int | None = None) -> list[ReviewRow]:
-        sql = "SELECT * FROM reviews WHERE due_at <= ? ORDER BY due_at"
+        """Due cards of words still marked unknown (a word marked known leaves the queue)."""
+        sql = (
+            "SELECT r.* FROM reviews r JOIN vocab v ON v.id = r.vocab_id"
+            " WHERE r.due_at <= ? AND v.unknown = 1 ORDER BY r.due_at"
+        )
         args: list[object] = [now.isoformat()]
         if limit is not None:
             sql += " LIMIT ?"
@@ -250,7 +264,10 @@ class ReviewRepo:
         return [_review(r) for r in self._c.execute(sql, args)]
 
     def count_due(self, until: datetime) -> int:
-        q = "SELECT COUNT(*) FROM reviews WHERE due_at <= ?"
+        q = (
+            "SELECT COUNT(*) FROM reviews r JOIN vocab v ON v.id = r.vocab_id"
+            " WHERE r.due_at <= ? AND v.unknown = 1"
+        )
         return int(self._c.execute(q, (until.isoformat(),)).fetchone()[0])
 
     def count_mature(self, min_stability_days: float) -> int:

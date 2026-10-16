@@ -11,7 +11,7 @@ from typer.testing import CliRunner
 
 from rosetta_engine import cli
 from rosetta_engine.config import Price, Settings
-from rosetta_engine.jobs.runner import JobError, JobRunner
+from rosetta_engine.jobs.runner import JobError, JobNotStarted, JobRunner
 from rosetta_engine.store import db
 from rosetta_engine.store.repo import JobRow, Repos
 from rosetta_engine.translate.base import ProviderResult, TranslationRequest
@@ -356,3 +356,132 @@ def test_cli_non_tty_without_yes_refuses(book_pdf: Path, monkeypatch: pytest.Mon
 
     assert result.exit_code == cli.EXIT_CANCELLED
     assert fake.calls == []
+
+
+# --- review fixes: start/cancel/pause races, confirm-before-mutate, unknown price -----------
+
+
+def test_cancelled_job_never_starts(repos: Repos, book_pdf: Path) -> None:
+    runner, svc, fake = _runner(repos)
+    job, (book, doc, meta) = _start(runner, svc, book_pdf)
+    plan = runner.plan(job, doc, meta, book)
+    runner.cancel(job.id)  # e.g. the user hit "İptal" while the job was being planned
+
+    with pytest.raises(JobNotStarted):
+        runner.run(job, plan)
+
+    assert fake.calls == []
+    assert runner.get(job.id).status == "cancelled"
+
+
+def test_pause_requested_before_start_is_honoured(repos: Repos, book_pdf: Path) -> None:
+    runner, svc, fake = _runner(repos)
+    job, (book, doc, meta) = _start(runner, svc, book_pdf)
+    plan = runner.plan(job, doc, meta, book)
+    runner.request_pause(job.id)
+
+    with pytest.raises(JobNotStarted):
+        runner.run(job, plan)
+
+    assert fake.calls == []
+    paused = runner.get(job.id)
+    assert paused.status == "paused" and not paused.pause_requested
+
+    runner.prepare_continue(job.id)  # the user confirmed "Devam"
+    final, _ = runner.run(runner.get(job.id), plan)
+    assert final.status == "done" and len(fake.calls) == 3
+
+
+def test_set_status_never_overwrites_cancelled(repos: Repos, book_pdf: Path) -> None:
+    runner, svc, _ = _runner(repos)
+    job, _ctx = _start(runner, svc, book_pdf)
+    runner.cancel(job.id)
+
+    repos.jobs.set_status(job.id, "paused", "interrupted")
+    repos.jobs.set_status(job.id, "done")
+
+    assert runner.get(job.id).status == "cancelled"
+    assert repos.jobs.start_running(job.id) is False
+
+
+def test_retry_runs_only_failed_pages_even_with_unstarted_pages(
+    repos: Repos, book_pdf: Path
+) -> None:
+    runner, svc, _ = _runner(repos)
+    job, (book, doc, meta) = _start(runner, svc, book_pdf)
+    # page 0 failed, pages 1-2 never started (e.g. the run stopped after 3 provider errors)
+    repos.jobs.update_progress(job.id, done_pages=[], failed={0: "boom"}, spent_usd=0.0)
+    repos.jobs.set_status(job.id, "paused", "3 consecutive provider errors")
+    healthy = FakeTranslator()
+    svc2 = PageTranslationService(healthy, repos, Settings(batch_max_pages=1))
+    runner2 = JobRunner(svc2, repos)
+
+    current = runner2.get(job.id)
+    plan = runner2.plan(current, doc, meta, book, only=sorted(current.failed))
+    final, _ = runner2.run(current, plan)
+
+    assert {it.id for req, _ in healthy.calls for it in req.items}  # some call happened
+    assert {b.page_no for b in plan.batches[0].blocks} == {0}
+    assert len(healthy.calls) == 1
+    assert final.done_pages == [0] and final.failed == {}
+    assert final.status == "paused" and final.remaining == [1, 2]
+
+
+class _CostlyFake(FakeTranslator):
+    def __init__(self, cost: float) -> None:
+        super().__init__(model="mystery-model")  # no price configured for it
+        self.cost = cost
+
+    def translate(self, request: TranslationRequest, *, strict: bool = False) -> ProviderResult:
+        r = super().translate(request, strict=strict)
+        return r.model_copy(update={"cost_usd": self.cost})
+
+
+def test_budget_enforced_on_reported_cost_when_price_unknown(repos: Repos, book_pdf: Path) -> None:
+    fake = _CostlyFake(0.01)
+    runner, svc, _ = _runner(repos, fake)
+    book, doc, meta = svc.open_book(book_pdf)
+    job = runner.create(book, ALL, "1-3", "tr", "fake", "mystery-model", 0.015)
+    plan = runner.plan(job, doc, meta, book)
+    assert plan.estimate.price_known is False
+
+    final, report = runner.run(job, plan)
+
+    assert len(fake.calls) == 2  # stopped before the 3rd: $0.02 reported ≥ $0.015 budget
+    assert report.stop_kind == "budget"
+    assert final.status == "paused"
+
+
+@pytest.mark.usefixtures("cli_env")
+def test_cli_declined_retry_keeps_failed_pages(
+    book_pdf: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _use(monkeypatch, _failing("error", 1))
+    runner_cli.invoke(cli.app, ["job", "start", str(book_pdf), "-p", "1-3", "--yes"])
+    (job,) = _job_rows()
+    assert sorted(job.failed) == [1, 2]
+    healthy = FakeTranslator()
+    _use(monkeypatch, healthy)
+
+    declined = runner_cli.invoke(cli.app, ["job", "retry-failed", str(job.id)], input="n\n")
+
+    assert declined.exit_code == cli.EXIT_CANCELLED
+    assert healthy.calls == []
+    (after,) = _job_rows()
+    assert sorted(after.failed) == [1, 2]  # nothing reset before confirmation
+    again = runner_cli.invoke(cli.app, ["job", "retry-failed", str(job.id), "--yes"])
+    assert again.exit_code == 0, again.output
+    assert len(healthy.calls) == 2
+
+
+@pytest.mark.usefixtures("cli_env")
+def test_cli_budget_warns_when_price_unknown(
+    book_pdf: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _use(monkeypatch, FakeTranslator(model="mystery-model"))
+
+    result = runner_cli.invoke(
+        cli.app, ["job", "start", str(book_pdf), "-p", "1", "--budget", "1", "--yes"]
+    )
+
+    assert "bütçe önceden uygulanamaz" in " ".join(result.output.split())

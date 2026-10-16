@@ -2,8 +2,10 @@
 
 Rosetta iki parçadan oluşur: Tauri masaüstü uygulaması (`app/`) ve Python motoru (`engine/`).
 Motor PyInstaller ile **tek dosyalık bir sidecar** (`rosetta-engine`) olarak paketlenir ve
-Tauri bundle'ına gömülür; uygulama açılışta `rosetta-engine serve --port 0 --token <rastgele>`
-çalıştırır ve stdout'taki tek JSON satırından port/token'ı okur.
+Tauri bundle'ına gömülür; uygulama açılışta `rosetta-engine serve --port 0` çalıştırır, rastgele
+token'ı `ROSETTA_SERVE_TOKEN` ortam değişkeniyle verir (komut satırında görünmez) ve stdout'taki
+tek JSON satırından port/token'ı okur. Motor, stdin'i kapanınca (uygulama kapandı ya da çöktü)
+kendiliğinden kapanır; uygulama çıkarken süreç grubuna önce SIGTERM, 2 sn sonra SIGKILL gönderir.
 
 ## Gerekenler
 

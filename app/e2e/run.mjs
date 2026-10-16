@@ -76,10 +76,12 @@ process.on("SIGINT", () => {
   process.exit(130);
 });
 
-const engine = spawn(uv, ["run", "rosetta", "serve", "--port", "0", "--token", token, "--dev-fake-ai", "--dev-fake-delay", ddia ? "0" : "1"], {
+// Like the desktop app: token via the environment (not argv), stdin kept open as a pipe so the
+// engine exits by itself when this runner goes away.
+const engine = spawn(uv, ["run", "rosetta", "serve", "--port", "0", "--dev-fake-ai", "--dev-fake-delay", ddia ? "0" : "1"], {
   cwd: engineDir,
-  env: { ...process.env, PATH: enginePath, ROSETTA_DATA_DIR: dataDir, ROSETTA_CONFIG_DIR: cfgDir },
-  stdio: ["ignore", "pipe", "inherit"],
+  env: { ...process.env, PATH: enginePath, ROSETTA_DATA_DIR: dataDir, ROSETTA_CONFIG_DIR: cfgDir, ROSETTA_SERVE_TOKEN: token },
+  stdio: ["pipe", "pipe", "inherit"],
 });
 children.push(engine);
 const port = await new Promise((ok, fail) => {

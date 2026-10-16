@@ -336,3 +336,72 @@ def test_cli_unknown_provider(book_pdf: Path, isolated: None) -> None:
     r = runner.invoke(cli.app, ["estimate", str(book_pdf), "--pages", "1", "--provider", "nope"])
 
     assert r.exit_code == 2
+
+
+# --- review fixes ----------------------------------------------------------------------
+
+
+def test_restore_never_unescapes_inline_code() -> None:
+    text, codes = protect("Compare `&lt;` and `a &amp;&amp; b` with x < y")
+
+    assert restore(text, codes) == "Compare `&lt;` and `a &amp;&amp; b` with x < y"
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        b"not json",
+        b'{"nope": []}',
+        b'{"translations": [{"x": 1}]}',
+        b'{"translations": [{"text": 5}]}',
+    ],
+)
+def test_deepl_malformed_response_is_provider_error(
+    monkeypatch: pytest.MonkeyPatch, payload: bytes
+) -> None:
+    monkeypatch.setenv("DEEPL_AUTH_KEY", "abc:fx")
+    t = DeepLTranslator(Settings(), client=_client(lambda r: httpx.Response(200, content=payload)))
+
+    with pytest.raises(ProviderError, match="bozuk"):
+        t.translate(TranslationRequest(lang="tr", items=[TranslationItem(id=1, sentences=["A."])]))
+
+
+def test_deepl_failed_second_chunk_reports_billed_first_chunk(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DEEPL_AUTH_KEY", "pro-key")
+    seen: list[httpx.Request] = []
+    ok = _deepl_ok(seen)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if seen:
+            return httpx.Response(500, text="boom")
+        return ok(request)
+
+    t = DeepLTranslator(Settings(), client=_client(handler))
+    big = TranslationRequest(
+        lang="tr", items=[TranslationItem(id=i, sentences=[f"S{i}."]) for i in range(1, 61)]
+    )
+
+    with pytest.raises(ProviderError) as info:
+        t.translate(big)
+
+    assert info.value.input_tokens > 0 and info.value.cost_usd > 0
+
+
+def test_http_clients_are_created_lazily() -> None:
+    d = DeepLTranslator(Settings())
+    o = OllamaTranslator(None, Settings())
+
+    assert d._client_or_none is None and o._client_or_none is None
+    d.close()
+    o.close()
+
+
+def test_ollama_malformed_response_is_provider_error() -> None:
+    t = OllamaTranslator(
+        "m", Settings(), client=_client(lambda r: httpx.Response(200, content=b"<html>"))
+    )
+
+    with pytest.raises(ProviderError, match="bozuk"):
+        t.translate(REQ)

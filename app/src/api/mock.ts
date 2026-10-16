@@ -221,8 +221,13 @@ export class MockEngineApi implements EngineApi {
     return Promise.resolve(null);
   }
 
-  assetUrl(_bookId: number, name: string): string {
-    return `mock-assets/${name}`;
+  assetBlob(_bookId: number, _name: string): Promise<Blob> {
+    // 1×1 transparent PNG.
+    const png = Uint8Array.from(
+      atob("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="),
+      (c) => c.charCodeAt(0),
+    );
+    return this.delay(new Blob([png], { type: "image/png" }));
   }
 
   estimateTranslate(bookId: number, req: TranslateEstimateRequest) {

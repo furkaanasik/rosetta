@@ -107,6 +107,11 @@ class BookRepo(_Repo):
         ).fetchone()
         return None if row is None else self._book(row)
 
+    def file_paths(self) -> list[str]:
+        """Stored source PDF paths of every book (exports must never overwrite these)."""
+        rows = self._c.execute("SELECT file_path FROM books WHERE file_path IS NOT NULL")
+        return [r[0] for r in rows]
+
     def get_by_hash(self, file_hash: str) -> Book | None:
         row = self._c.execute(
             "SELECT id, file_hash, title, page_count, file_path FROM books WHERE file_hash = ?",
@@ -546,11 +551,25 @@ class JobRepo(_Repo):
             )
 
     def set_status(self, job_id: int, status: JobStatus, stop_reason: str | None = None) -> None:
+        """Set the status; a cancelled job stays cancelled (only 'cancelled' may be re-set)."""
         with self._c:
             self._c.execute(
-                "UPDATE jobs SET status = ?, stop_reason = ?, updated_at = ? WHERE id = ?",
-                (status, stop_reason, self._now(), job_id),
+                "UPDATE jobs SET status = ?, stop_reason = ?, updated_at = ? "
+                "WHERE id = ? AND (status != 'cancelled' OR ? = 'cancelled')",
+                (status, stop_reason, self._now(), job_id, status),
             )
+
+    def start_running(self, job_id: int) -> bool:
+        """Atomically move a runnable job to 'running'. False when it was cancelled, finished
+        or has a pending pause request — the caller must then not call the provider."""
+        with self._c:
+            cur = self._c.execute(
+                "UPDATE jobs SET status = 'running', stop_reason = NULL, updated_at = ? "
+                "WHERE id = ? AND status IN ('pending', 'paused', 'running', 'failed') "
+                "AND pause_requested = 0",
+                (self._now(), job_id),
+            )
+        return cur.rowcount == 1
 
     def request_pause(self, job_id: int) -> None:
         with self._c:

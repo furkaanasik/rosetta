@@ -9,9 +9,10 @@ sh scripts/prepare-dev-sidecar.sh     # geliştirme sidecar'ı (uv ile repo'daki
 PATH="$HOME/.cargo/bin:$PATH" npm run tauri dev
 ```
 
-- Motor bağlantısı: Tauri, `binaries/rosetta-engine` sidecar'ını `serve --port 0 --token …` ile başlatır ve
-  stdout'taki ilk JSON satırından port/token'ı okur. Geliştirmede `ROSETTA_ENGINE_URL`/`ROSETTA_ENGINE_TOKEN`
-  ile elle başlatılmış bir motora bağlanılabilir. Uç noktalar: [API_CONTRACT.md](API_CONTRACT.md).
+- Motor bağlantısı: Tauri, `binaries/rosetta-engine` sidecar'ını `serve --port 0` ile başlatır (token
+  `ROSETTA_SERVE_TOKEN` ortam değişkeniyle, komut satırında değil) ve stdout'taki ilk JSON satırından
+  port/token'ı okur. Geliştirme derlemelerinde `ROSETTA_ENGINE_URL`/`ROSETTA_ENGINE_TOKEN` ile elle
+  başlatılmış bir motora bağlanılabilir (sürüm derlemesinde kapalı). Uç noktalar: [API_CONTRACT.md](API_CONTRACT.md).
 - Görünüm modları: Orijinal, Split (paragraf bazlı senkron kaydırma), Sadece Çeviri, Öğrenme.
 - AI işlemleri iki adımlıdır: tahmin → maliyet penceresi → "Onayla". Onaysız çağrı yoktur.
 - Motorun ürettiği HTML ayrıca temizlenir (script/olay öznitelikleri atılır) ve sıkı bir CSP altında gösterilir.

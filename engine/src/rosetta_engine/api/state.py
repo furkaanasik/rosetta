@@ -21,6 +21,7 @@ from rosetta_engine import config
 from rosetta_engine.api.confirm import ConfirmStore
 from rosetta_engine.api.errors import ApiError, bad_request, not_found
 from rosetta_engine.extract.extractor import BookMeta
+from rosetta_engine.extract.pdf_reader import file_hash
 from rosetta_engine.models import Book, PageBlocks
 from rosetta_engine.store.db import connect, migrate
 from rosetta_engine.store.repo import Repos
@@ -72,6 +73,8 @@ class EngineState:
         self._books_lock = threading.Lock()
         self._job_threads: dict[int, threading.Thread] = {}
         self._jobs_lock = threading.Lock()
+        self._job_reserved = False
+        self.ai_lock = threading.Lock()
         self._migrated = False
         self._migrate_lock = threading.Lock()
 
@@ -129,7 +132,15 @@ class EngineState:
             raise not_found(f"Kitap bulunamadı: #{book_id}")
         if not stored.file_path or not Path(stored.file_path).is_file():
             raise bad_request(f"Kitabın PDF dosyası yok: {stored.file_path}; yeniden aç")
-        return self.open_book(s, Path(stored.file_path))
+        path = Path(stored.file_path)
+        if file_hash(path) != stored.file_hash:
+            # A different file now sits at the stored path: never mix its pages into this
+            # book's ids (blocks, translations, jobs).
+            raise ApiError(
+                "conflict",
+                f"#{book_id} kitabının yolundaki dosya değişmiş ({path}); PDF'i yeniden aç",
+            )
+        return self.open_book(s, path)
 
     def pages(self, s: Session, ob: OpenBook, pages: list[int]) -> dict[int, PageBlocks]:
         """0-based pages extracted (or from the DB), under the book's document lock."""
@@ -150,18 +161,56 @@ class EngineState:
                 ob.doc.close()  # type: ignore[no-untyped-call]
             self._books.clear()
 
+    # --- AI exclusivity ----------------------------------------------------------------------
+
+    @contextmanager
+    def ai_call(self) -> Iterator[None]:
+        """One AI operation at a time in this process (translate, profile, explain; jobs hold
+        it for their whole run). Busy → 503 before any confirm token is consumed."""
+        if not self.ai_lock.acquire(blocking=False):
+            raise ApiError("unavailable", "Başka bir AI işlemi çalışıyor; bitince tekrar dene")
+        try:
+            yield
+        finally:
+            self.ai_lock.release()
+
     # --- background jobs ----------------------------------------------------------------------
 
-    def start_job_thread(self, job_id: int, target: Callable[[], None]) -> None:
+    def _busy_job(self) -> int | None:
+        running = [j for j, t in self._job_threads.items() if t.is_alive()]
+        if running:
+            return running[0]
+        return -1 if self._job_reserved else None
+
+    @contextmanager
+    def job_slot(self) -> Iterator[Callable[[int, Callable[[], None]], None]]:
+        """Reserve the single job slot *before* consuming a token or touching job rows, so a
+        busy server never leaves an orphan job or a half-applied state change behind.
+
+        Yields ``start(job_id, target)``; the thread it starts holds the AI lock while running.
+        """
         with self._jobs_lock:
-            running = [j for j, t in self._job_threads.items() if t.is_alive()]
-            if running:
-                raise ApiError(
-                    "unavailable", f"Başka bir toplu iş çalışıyor (#{running[0]}); önce duraklat"
-                )
-            t = threading.Thread(target=target, name=f"rosetta-job-{job_id}", daemon=True)
-            self._job_threads[job_id] = t
+            busy = self._busy_job()
+            if busy is not None:
+                which = f" (#{busy})" if busy > 0 else ""
+                raise ApiError("unavailable", f"Başka bir toplu iş çalışıyor{which}; önce duraklat")
+            self._job_reserved = True
+
+        def start(job_id: int, target: Callable[[], None]) -> None:
+            def body() -> None:
+                with self.ai_lock:
+                    target()
+
+            t = threading.Thread(target=body, name=f"rosetta-job-{job_id}", daemon=True)
+            with self._jobs_lock:
+                self._job_threads[job_id] = t
             t.start()
+
+        try:
+            yield start
+        finally:
+            with self._jobs_lock:
+                self._job_reserved = False
 
     def job_thread(self, job_id: int) -> threading.Thread | None:
         with self._jobs_lock:

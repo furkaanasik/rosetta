@@ -33,6 +33,39 @@ export function SplitView({ api, bookId, doc, page, zoom, revision, onWordClick 
   const driver = useRef<"left" | "right" | null>(null);
   const release = useRef<number | undefined>(undefined);
   const scale = useRef(zoom);
+  // Block boxes in the translation pane: measured once per layout (not per scroll event) and
+  // invalidated when the content or the pane size changes.
+  const boxes = useRef<ElementBox[] | null>(null);
+  const frame = useRef<number | undefined>(undefined);
+
+  const boxesNow = useCallback((): ElementBox[] => {
+    if (!boxes.current && right.current) boxes.current = measure(right.current);
+    return boxes.current ?? [];
+  }, []);
+
+  useEffect(() => {
+    const el = right.current;
+    if (!el) return;
+    const invalidate = () => (boxes.current = null);
+    const mo = new MutationObserver(invalidate);
+    mo.observe(el, { childList: true, subtree: true });
+    const ro = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(invalidate);
+    ro?.observe(el);
+    return () => {
+      mo.disconnect();
+      ro?.disconnect();
+      if (frame.current !== undefined) window.cancelAnimationFrame(frame.current);
+    };
+  }, []);
+
+  /** At most one sync per animation frame; the latest scroll position wins. */
+  const schedule = useCallback((fn: () => void) => {
+    if (frame.current !== undefined) window.cancelAnimationFrame(frame.current);
+    frame.current = window.requestAnimationFrame(() => {
+      frame.current = undefined;
+      fn();
+    });
+  }, []);
 
   useEffect(() => {
     if (!api || bookId === null) return;
@@ -54,20 +87,26 @@ export function SplitView({ api, bookId, doc, page, zoom, revision, onWordClick 
       scale.current = s;
       if (driver.current === "right" || !blocks || !right.current) return;
       lock("left");
-      const target = translationScrollFor(blocks, top, s, measure(right.current));
-      if (target !== null) right.current.scrollTop = target;
+      schedule(() => {
+        if (!right.current) return;
+        const target = translationScrollFor(blocks, top, s, boxesNow());
+        if (target !== null) right.current.scrollTop = target;
+      });
     },
-    [blocks],
+    [blocks, schedule, boxesNow],
   );
 
   const onRight = useCallback(
     (top: number) => {
       if (driver.current === "left" || !blocks || !left.current || !right.current) return;
       lock("right");
-      const target = pdfScrollFor(blocks, top, scale.current, measure(right.current));
-      if (target !== null) left.current.scrollTop = target;
+      schedule(() => {
+        if (!left.current) return;
+        const target = pdfScrollFor(blocks, top, scale.current, boxesNow());
+        if (target !== null) left.current.scrollTop = target;
+      });
     },
-    [blocks],
+    [blocks, schedule, boxesNow],
   );
 
   return (

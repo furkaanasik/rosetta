@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import json
+import shutil
 import threading
 import time
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
+import pymupdf
 import pytest
 from fastapi.testclient import TestClient
 
@@ -158,6 +160,9 @@ def test_requires_token(client: TestClient) -> None:
     err(client.get("/api/health"), "unauthorized", 401)
     err(client.get("/api/health", headers={"Authorization": "Bearer nope"}), "unauthorized", 401)
     err(client.get(f"/api/health?token={TOKEN}"), "unauthorized", 401)  # only assets
+    # "/assets/" in the path or query of another route is not the asset route
+    err(client.get(f"/api/usage?x=/assets/&token={TOKEN}"), "unauthorized", 401)
+    err(client.get(f"/api/books/1/file?token={TOKEN}"), "unauthorized", 401)
     assert ok(client.get("/api/health", headers=AUTH))["ok"] is True
 
 
@@ -506,6 +511,151 @@ def test_job_retry_failed_and_cancel(
     assert wait_job(client, job2["id"], {"cancelled"})["status"] == "cancelled"
 
 
+def _db_repos() -> Any:
+    from rosetta_engine import config
+    from rosetta_engine.store.db import connect, migrate
+    from rosetta_engine.store.repo import Repos
+
+    conn = connect(config.db_path())
+    migrate(conn)
+    return conn, Repos.from_conn(conn)
+
+
+def test_retry_failed_runs_only_the_confirmed_failed_pages(
+    client: TestClient, book_pdf: Path, translators: Translators
+) -> None:
+    """H1: a paused job with 1 failed + 2 never-started pages; retry must touch only page 1."""
+    bid = open_book(client, book_pdf)["id"]
+    conn, repos = _db_repos()
+    try:
+        row = repos.jobs.create(bid, "tr", "fake", "fake", "1-3", [0, 1, 2], None)
+        repos.jobs.update_progress(row.id, done_pages=[], failed={0: "boom"}, spent_usd=0.0)
+        repos.jobs.set_status(row.id, "paused", "3 consecutive provider errors")
+    finally:
+        conn.close()
+
+    est = ok(client.post(f"/api/jobs/{row.id}/retry-failed/estimate", headers=AUTH))
+    assert est["pages"] == [1]
+    ok(
+        client.post(
+            f"/api/jobs/{row.id}/retry-failed",
+            json={"confirm_token": est["confirm_token"]},
+            headers=AUTH,
+        )
+    )
+    after = wait_job(client, row.id, {"paused", "done", "failed"})
+
+    assert translators.calls == 1  # exactly one batch: page 1 (batch_max_pages=1)
+    assert after["done_pages"] == [1] and after["failed_pages"] == {}
+    assert after["status"] == "paused"  # pages 2-3 still waiting, never estimated or paid
+
+
+def test_job_estimate_warns_budget_cannot_be_preapplied_without_price(
+    client: TestClient, book_pdf: Path
+) -> None:
+    bid = open_book(client, book_pdf)["id"]
+    with_budget = ok(
+        client.post(
+            f"/api/books/{bid}/jobs/estimate", json={"pages": [1], "budget_usd": 1}, headers=AUTH
+        )
+    )
+    without = ok(client.post(f"/api/books/{bid}/jobs/estimate", json={"pages": [1]}, headers=AUTH))
+
+    assert with_budget["price_known"] is False
+    assert any("bütçe önceden uygulanamaz" in w for w in with_budget["warnings"])
+    assert without["warnings"] == []
+
+
+def test_blank_vocab_word_is_bad_request(client: TestClient) -> None:
+    err(client.post("/api/vocab", json={"word": "   "}, headers=AUTH), "bad_request", 400)
+
+
+def test_retry_token_refused_if_failed_pages_changed(client: TestClient, book_pdf: Path) -> None:
+    bid = open_book(client, book_pdf)["id"]
+    conn, repos = _db_repos()
+    try:
+        row = repos.jobs.create(bid, "tr", "fake", "fake", "1-3", [0, 1, 2], None)
+        repos.jobs.update_progress(row.id, done_pages=[], failed={0: "boom"}, spent_usd=0.0)
+        repos.jobs.set_status(row.id, "failed", "1 sayfa hatalı")
+        est = ok(client.post(f"/api/jobs/{row.id}/retry-failed/estimate", headers=AUTH))
+        repos.jobs.update_progress(row.id, done_pages=[], failed={0: "a", 1: "b"}, spent_usd=0.0)
+    finally:
+        conn.close()
+
+    err(
+        client.post(
+            f"/api/jobs/{row.id}/retry-failed",
+            json={"confirm_token": est["confirm_token"]},
+            headers=AUTH,
+        ),
+        "expired_token",
+        409,
+    )
+
+
+def test_busy_job_slot_consumes_no_token_and_leaves_no_job(
+    client: TestClient, book_pdf: Path, translators: Translators
+) -> None:
+    gate, entered = threading.Event(), threading.Event()
+    translators.make = lambda: GateTranslator(gate, entered)
+    bid = open_book(client, book_pdf)["id"]
+    first = ok(client.post(f"/api/books/{bid}/jobs/estimate", json={"pages": [1]}, headers=AUTH))
+    second = ok(client.post(f"/api/books/{bid}/jobs/estimate", json={"pages": [2]}, headers=AUTH))
+    job = ok(client.post("/api/jobs", json={"confirm_token": first["confirm_token"]}, headers=AUTH))
+    assert entered.wait(10)
+
+    busy = client.post("/api/jobs", json={"confirm_token": second["confirm_token"]}, headers=AUTH)
+    err(busy, "unavailable", 503)
+    assert len(ok(client.get("/api/jobs", headers=AUTH))) == 1  # no orphan pending job
+
+    gate.set()
+    wait_job(client, job["id"], {"done"})
+    translators.make = FakeTranslator
+    # the refused token was not consumed: it still starts the second job
+    later = ok(
+        client.post("/api/jobs", json={"confirm_token": second["confirm_token"]}, headers=AUTH)
+    )
+    assert wait_job(client, later["id"], {"done"})["done_pages"] == [2]
+
+
+def test_ai_calls_are_exclusive_while_a_job_runs(
+    client: TestClient, book_pdf: Path, translators: Translators
+) -> None:
+    gate, entered = threading.Event(), threading.Event()
+    translators.make = lambda: GateTranslator(gate, entered)
+    bid = open_book(client, book_pdf)["id"]
+    est_job = ok(client.post(f"/api/books/{bid}/jobs/estimate", json={"pages": [1]}, headers=AUTH))
+    est_tr = ok(client.post(f"/api/books/{bid}/estimate", json={"pages": [2]}, headers=AUTH))
+    job = ok(
+        client.post("/api/jobs", json={"confirm_token": est_job["confirm_token"]}, headers=AUTH)
+    )
+    assert entered.wait(10)
+
+    body = {"confirm_token": est_tr["confirm_token"]}
+    err(client.post(f"/api/books/{bid}/translate", json=body, headers=AUTH), "unavailable", 503)
+
+    gate.set()
+    wait_job(client, job["id"], {"done"})
+    translators.make = FakeTranslator
+    assert ok(client.post(f"/api/books/{bid}/translate", json=body, headers=AUTH))["done_pages"]
+
+
+def test_book_whose_file_changed_is_a_conflict(
+    make_client: Callable[..., TestClient], book_pdf: Path, tmp_path: Path
+) -> None:
+    first = make_client()
+    bid = open_book(first, book_pdf)["id"]
+    other = tmp_path / "other.pdf"
+    doc = pymupdf.open()  # type: ignore[no-untyped-call]
+    doc.new_page().insert_text((50, 60), "A different book")
+    doc.save(other)
+    doc.close()
+    shutil.copy(other, book_pdf)  # a different file now sits at the stored path
+
+    restarted = make_client()
+    err(restarted.get(f"/api/books/{bid}/toc", headers=AUTH), "conflict", 409)
+
+
 # --- profile ----------------------------------------------------------------------------------
 
 
@@ -601,6 +751,9 @@ def test_learning_endpoints(client: TestClient, book_pdf: Path) -> None:
     patched = ok(client.patch(f"/api/vocab/{item['id']}", json={"unknown": False}, headers=AUTH))
     assert patched["unknown"] is False
 
+    due = ok(client.get("/api/review/due?limit=10", headers=AUTH))
+    assert {c["vocab_id"] for c in due} == {keyed["id"]}  # a word marked known leaves the queue
+    ok(client.patch(f"/api/vocab/{item['id']}", json={"unknown": True}, headers=AUTH))
     due = ok(client.get("/api/review/due?limit=10", headers=AUTH))
     assert {c["vocab_id"] for c in due} == {item["id"], keyed["id"]}
     card = next(c for c in due if c["vocab_id"] == item["id"])

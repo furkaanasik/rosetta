@@ -38,7 +38,8 @@ export interface EngineApi {
   toc(bookId: number): Promise<TocEntry[]>;
   pageBlocks(bookId: number, page: number): Promise<PageBlocks>;
   pageHtml(bookId: number, page: number, mode: HtmlMode, lang?: string): Promise<PageHtml>;
-  assetUrl(bookId: number, name: string): string;
+  /** A cropped figure/table image, fetched with the bearer token (never put in a URL). */
+  assetBlob(bookId: number, name: string): Promise<Blob>;
   /** The PDF bytes (browser dev mode, where the file path can't be loaded directly); null if unavailable. */
   bookFile(bookId: number): Promise<ArrayBuffer | null>;
 

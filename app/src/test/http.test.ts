@@ -30,6 +30,16 @@ describe("HttpEngineApi", () => {
     await expect(api.translate(1, "t")).rejects.toMatchObject({ kind: "usage_limit", status: 429 });
   });
 
+  it("maps a 409 conflict (book file changed) to its own kind", async () => {
+    const fn = (async () =>
+      new Response(JSON.stringify({ error: { kind: "conflict", message: "Dosya değişmiş" } }), {
+        status: 409,
+        headers: { "Content-Type": "application/json" },
+      })) as unknown as typeof fetch;
+    const api = new HttpEngineApi({ baseUrl: "http://x", token: "t" }, fn);
+    await expect(api.getBook(1)).rejects.toMatchObject({ kind: "conflict", status: 409 });
+  });
+
   it("reports network failures as unavailable", async () => {
     const fn = (async () => {
       throw new TypeError("connection refused");
@@ -40,8 +50,15 @@ describe("HttpEngineApi", () => {
     expect((err as EngineError).kind).toBe("unavailable");
   });
 
-  it("builds asset URLs with the token", () => {
-    const api = new HttpEngineApi({ baseUrl: "http://127.0.0.1:1", token: "t" }, (async () => new Response()) as typeof fetch);
-    expect(api.assetUrl(2, "p001_b0.png")).toBe("http://127.0.0.1:1/api/books/2/assets/p001_b0.png?token=t");
+  it("fetches assets with the bearer header, never a token in the URL", async () => {
+    const seen: { url: string; auth: string | null }[] = [];
+    const fn = (async (url: string, init?: RequestInit) => {
+      seen.push({ url, auth: new Headers(init?.headers).get("Authorization") });
+      return new Response(new Uint8Array([1, 2]), { headers: { "Content-Type": "image/png" } });
+    }) as unknown as typeof fetch;
+    const api = new HttpEngineApi({ baseUrl: "http://127.0.0.1:1", token: "t" }, fn);
+    const blob = await api.assetBlob(2, "p001_b0.png");
+    expect(blob.size).toBe(2);
+    expect(seen[0]).toEqual({ url: "http://127.0.0.1:1/api/books/2/assets/p001_b0.png", auth: "Bearer t" });
   });
 });

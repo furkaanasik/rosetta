@@ -53,7 +53,10 @@ simplemma kökü. Türkçe karşılığı olan aday önce gelir (`went → go`, 
 - Arka yüz: kelime + anlam + cümlenin Türkçesi (cache'te herhangi bir sağlayıcı/model ile
   çevrilmişse; cümle eşleşmesi `sentence_aligned` ise cümle, değilse paragraf).
 - `rosetta review [-n 20]` — Again / Hard / Good / Easy (1–4, "tekrar/zor/iyi/kolay" de olur).
-  Terminal dışında sırası gelen kartları listeler.
+  Terminal dışında sırası gelen kartları listeler. "Biliyorum" işaretli kelimeler tekrar
+  kuyruğuna girmez (yeniden "bilmiyorum" denirse kart kaldığı yerden döner).
+- Boş kelime kaydedilmez; aynı lemma eşzamanlı eklenirse tek satır kalır (`ON CONFLICT`).
+  Aramada `%` ve `_` harfiyen aranır.
 
 Tablolar (`004_learning.sql`): `vocab`, `reviews` (FSRS kart durumu + `card_json`),
 `review_log`.

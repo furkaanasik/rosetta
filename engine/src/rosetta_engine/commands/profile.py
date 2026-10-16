@@ -30,6 +30,7 @@ from rosetta_engine.models import Book, BookProfile
 from rosetta_engine.profile.profiler import Profiler
 from rosetta_engine.store.db import connect, migrate
 from rosetta_engine.store.repo import Repos
+from rosetta_engine.textsafe import strip_controls
 from rosetta_engine.translate.claude_cli import CLAUDE_BIN, complete
 from rosetta_engine.translate.fake import FakeTranslator
 from rosetta_engine.translate.service import PageTranslationService
@@ -84,7 +85,7 @@ def _open(pdf: Path) -> Iterator[_Book]:
 def _print_profile(p: BookProfile) -> None:
     from rosetta_engine.cli import console
 
-    console.print_json(json.dumps(p.model_dump(by_alias=True), ensure_ascii=False))
+    console.print_json(strip_controls(json.dumps(p.model_dump(by_alias=True), ensure_ascii=False)))
 
 
 def _stored(b: _Book) -> BookProfile:
@@ -144,19 +145,19 @@ def analyze(
         try:
             profile = profiler.run(plan)
         except UsageLimitError as ex:
-            cli.err.print(f"[yellow]Kullanım limiti:[/] {escape(str(ex))}")
+            cli.err.print(f"[yellow]Kullanım limiti:[/] {escape(strip_controls(str(ex)))}")
             raise typer.Exit(cli.EXIT_USAGE_LIMIT) from ex
         except ProviderAuthError as ex:
-            cli.err.print(f"[red]Kimlik doğrulama:[/] {escape(str(ex))}")
+            cli.err.print(f"[red]Kimlik doğrulama:[/] {escape(strip_controls(str(ex)))}")
             raise typer.Exit(cli.EXIT_AUTH) from ex
         except BudgetExceededError as ex:
-            cli.err.print(f"[yellow]Bütçe sınırı aşıldı:[/] {escape(str(ex))}")
+            cli.err.print(f"[yellow]Bütçe sınırı aşıldı:[/] {escape(strip_controls(str(ex)))}")
             raise typer.Exit(cli.EXIT_BUDGET) from ex
         except ProviderUnavailableError as ex:
-            cli.err.print(f"[red]Sağlayıcı kullanılamıyor:[/] {escape(str(ex))}")
+            cli.err.print(f"[red]Sağlayıcı kullanılamıyor:[/] {escape(strip_controls(str(ex)))}")
             raise typer.Exit(cli.EXIT_UNAVAILABLE) from ex
         except ProviderError as ex:
-            cli.err.print(f"[red]Profil çıkarılamadı:[/] {escape(str(ex))}")
+            cli.err.print(f"[red]Profil çıkarılamadı:[/] {escape(strip_controls(str(ex)))}")
             raise typer.Exit(1) from ex
         cli.console.print(
             f"Profil kaydedildi: {len(profile.glossary)} terim, "

@@ -1,6 +1,7 @@
-import { useEffect, useRef } from "react";
+import { useRef } from "react";
 import type { Estimate } from "../api/types";
 import { tokens, usd } from "../lib/format";
+import { useModalFocus } from "../lib/useModalFocus";
 
 const OPERATION_LABELS: Record<Estimate["operation"], string> = {
   translate: "Çeviri",
@@ -19,12 +20,15 @@ interface Props {
 /** Cost confirmation (rule 2): nothing runs until the user presses "Onayla". */
 export function CostModal({ estimate: e, busy = false, onConfirm, onCancel }: Props) {
   const cancelRef = useRef<HTMLButtonElement>(null);
-  useEffect(() => cancelRef.current?.focus(), []);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  // While the confirmed call runs it can't be undone: Escape must not hide it (the request
+  // would keep running and spending while the user thinks it was cancelled).
+  useModalFocus(dialogRef, () => !busy && onCancel(), cancelRef);
   const nothingToDo = e.calls === 0;
 
   return (
-    <div className="modal-backdrop" role="presentation" onKeyDown={(ev) => ev.key === "Escape" && onCancel()}>
-      <div className="modal" role="dialog" aria-modal="true" aria-labelledby="cost-title">
+    <div className="modal-backdrop" role="presentation">
+      <div ref={dialogRef} tabIndex={-1} className="modal" role="dialog" aria-modal="true" aria-labelledby="cost-title" aria-busy={busy}>
         <h2 id="cost-title">{OPERATION_LABELS[e.operation]} — maliyet onayı</h2>
         <dl className="cost-grid">
           <dt>Sağlayıcı / model</dt>
@@ -67,6 +71,11 @@ export function CostModal({ estimate: e, busy = false, onConfirm, onCancel }: Pr
           <p className="note warn">Bu sağlayıcı kitap profilini ve bağlamı kullanmaz.</p>
         )}
         {nothingToDo && <p className="note">Tümü cache'te — AI çağrısı yapılmayacak.</p>}
+        {(e.warnings ?? []).map((w) => (
+          <p key={w} className="note warn" role="alert">
+            {w}
+          </p>
+        ))}
         <div className="modal-actions">
           <button ref={cancelRef} type="button" onClick={onCancel} disabled={busy}>
             İptal

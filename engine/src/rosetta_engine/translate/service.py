@@ -407,18 +407,41 @@ class PageTranslationService:
                 stopped, stop_kind = "pause requested", "paused"
                 log.info("translation paused before batch %d/%d", n, total_batches)
                 break
-            if blocks and budget_usd is not None and price is not None:
-                batch_usd = usd(
-                    batch.est_input_tokens, batch.est_output_tokens + self._thinking, price
-                )
-                if tally.cost_usd + batch_usd > budget_usd:
+            if blocks and budget_usd is not None:
+                if price is not None:
+                    batch_usd = usd(
+                        batch.est_input_tokens, batch.est_output_tokens + self._thinking, price
+                    )
+                    over = tally.cost_usd + batch_usd > budget_usd
                     stopped = (
                         f"budget ${budget_usd:.4f} would be exceeded "
                         f"(spent ${tally.cost_usd:.4f} + next batch ≈ ${batch_usd:.4f})"
                     )
+                else:
+                    # No price to estimate with: enforce on the cost the provider reported.
+                    over = tally.cost_usd >= budget_usd
+                    stopped = (
+                        f"budget ${budget_usd:.4f} reached (spent ${tally.cost_usd:.4f}; "
+                        "model price unknown)"
+                    )
+                if over:
                     stop_kind = "budget"
                     log.warning("translation stopped: %s", stopped)
                     break
+                stopped = None
+            if blocks and not force:
+                # Re-check right before paying: a concurrent run may have cached these blocks.
+                fresh = self._uncached(book, blocks, lang, False)
+                if len(fresh) < len(blocks):
+                    keep = {(b.page_no, b.text_hash) for b in fresh}
+                    for b in blocks:
+                        if (b.page_no, b.text_hash) not in keep:
+                            translated[b.page_no].add(b.text_hash)
+                    for p in sorted({b.page_no for b in blocks}):
+                        if p not in done and needed[p] <= translated[p]:
+                            self._save_page(book, p, lang, [])
+                            done.append(p)
+                    blocks = fresh
             if blocks:
                 request = self._request(blocks, batch.context, lang, profile)
                 try:

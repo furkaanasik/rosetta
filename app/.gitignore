@@ -7,3 +7,4 @@ src-tauri/binaries/rosetta-engine-*
 test-results/
 playwright-report/
 e2e/screenshots/
+public/pdfjs/

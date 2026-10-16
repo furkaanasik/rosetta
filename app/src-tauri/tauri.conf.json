@@ -22,7 +22,7 @@
     "security": {
       "csp": {
         "default-src": "'self'",
-        "script-src": "'self'",
+        "script-src": "'self' 'wasm-unsafe-eval'",
         "style-src": "'self' 'unsafe-inline'",
         "img-src": "'self' data: blob: asset: http://asset.localhost http://127.0.0.1:*",
         "connect-src": "'self' ipc: http://ipc.localhost asset: http://asset.localhost http://127.0.0.1:*",
@@ -34,10 +34,12 @@
       "assetProtocol": {
         "enable": true,
         "scope": [
-          "$HOME/**",
-          "/media/**",
-          "/mnt/**",
-          "/tmp/**"
+          "$HOME/**/*.pdf",
+          "$HOME/**/*.PDF",
+          "/media/**/*.pdf",
+          "/media/**/*.PDF",
+          "/mnt/**/*.pdf",
+          "/mnt/**/*.PDF"
         ]
       }
     }

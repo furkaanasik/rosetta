@@ -69,6 +69,8 @@ class Notebook:
         Meaning: non-blank ``meaning`` → dictionary Turkish → book ``glossary`` (word or lemma).
         """
         clean = normalize(word)
+        if not clean:
+            raise ValueError("boş kelime kaydedilemez")
         lemma = self._d.lemma_of(clean)
         ctx = Context(sentence=sentence or "")
         page_no = page.page_no if page is not None else None

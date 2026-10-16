@@ -18,7 +18,7 @@ uv run rosetta export kitap.pdf --no-toc-page -o ~/kitap.tr.pdf
 | `--lang`, `--provider`, `--model` | config | Hangi çevirinin kullanılacağı (cache anahtarı) |
 | `--paper` | `a4` | `a4` \| `letter` |
 | `--toc-page/--no-toc-page` | açık | Başa sayfa numaralı "İçindekiler" sayfası |
-| `-o/--out` | `~/.local/share/rosetta/out/<hash>/<kitap>.tr.pdf` (`.en-tr.pdf` iki dilli) | Çıktı yolu |
+| `-o/--out` | `~/.local/share/rosetta/out/<hash>/<kitap>.tr.pdf` (`.en-tr.pdf` iki dilli) | Çıktı yolu; hiçbir kitabın kaynak PDF'i olamaz (reddedilir) |
 
 Çıkış kodu 0 başarı, 1 hata (Chromium yok, çeviri yok, yazdırma hatası).
 
@@ -53,3 +53,15 @@ Chromium (veya Chrome). Arch: `pacman -S chromium` · Debian/Ubuntu: `apt instal
 - Gömülü TOC'ta olup dışa aktarılan sayfalarda başlığı bulunamayan girdiler sayfa başına bağlanır
   ve orijinal başlıkla görünür.
 - Çok büyük aralıklar tek HTML olarak basılır; 650 sayfa için Chromium süresi sınırı 10 dk'dır.
+
+## Güvenlik ve sağlamlık
+
+- Çıktı yolu DB'deki herhangi bir kitabın kaynak PDF'ine çözülüyorsa dışa aktarma reddedilir
+  (`-o kitap.pdf` artık orijinali silemez).
+- Baskı aynı klasörde geçici bir dosyaya yapılır, yer imleri eklenir, sonra `os.replace` ile
+  hedefe konur: başarısız bir dışa aktarma önceki çıktıyı bozmaz.
+- Chromium kendi süreç grubunda çalışır; zaman aşımında tüm grup (yardımcı süreçler dahil)
+  öldürülür.
+- `--provider deepl|ollama` çevirileri o sağlayıcının cache anahtarıyla bulunur
+  (`deepl/deepl`, `ollama/ollama/<model>`).
+- API'de kitap kilidi yalnızca belge işi için tutulur; baskı kilit dışında yapılır.

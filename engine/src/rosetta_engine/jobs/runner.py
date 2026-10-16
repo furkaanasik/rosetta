@@ -32,9 +32,18 @@ FINISHED = frozenset({"done", "failed", "cancelled"})
 
 JobCallback = Callable[[JobRow], None]
 
+BUDGET_NO_PRICE = (
+    "Model fiyatı bilinmiyor: bütçe önceden uygulanamaz; iş yalnızca gerçek harcama "
+    "bütçeye ulaşınca duraklar."
+)
+
 
 class JobError(RosettaError):
     """Invalid job operation (unknown id, finished job, …)."""
+
+
+class JobNotStarted(JobError):
+    """The job was cancelled, finished or paused before it could start; nothing was called."""
 
 
 class JobRunner:
@@ -90,6 +99,16 @@ class JobRunner:
         self._r.jobs.set_status(job_id, "cancelled", "cancelled by user")
         return self.get(job_id)
 
+    def prepare_continue(self, job_id: int) -> JobRow:
+        """After the user confirmed a resume/retry: drop a stale pause request (e.g. from
+        pausing a waiting job) so the job can start. A pause requested after this call is
+        still honoured, because ``run`` starts atomically only without a pending request."""
+        job = self.get(job_id)
+        if job.status in FINISHED and job.status != "failed":
+            raise JobError(f"iş #{job_id} zaten bitti ({job.status})")
+        self._r.jobs.clear_pause(job_id)
+        return self.get(job_id)
+
     def reset_failed(self, job_id: int) -> JobRow:
         """Move failed pages back to the remaining set (for ``retry-failed``)."""
         job = self.get(job_id)
@@ -130,12 +149,19 @@ class JobRunner:
         on_progress: Callable[[int, int], None] | None = None,
         on_update: JobCallback | None = None,
     ) -> tuple[JobRow, TranslationReport]:
-        """Execute ``plan`` for ``job``. Call only after the user approved the estimate."""
-        if job.status in FINISHED and job.status != "failed":
-            raise JobError(f"iş #{job.id} zaten bitti ({job.status})")
+        """Execute ``plan`` for ``job``. Call only after the user approved the estimate.
+
+        Starts with an atomic transition to 'running' that fails if the job was cancelled or a
+        pause was requested meanwhile; then raises ``JobNotStarted`` without any provider call.
+        """
         jid = job.id
-        self._r.jobs.clear_pause(jid)
-        self._r.jobs.set_status(jid, "running")
+        if not self._r.jobs.start_running(jid):
+            current = self.get(jid)
+            if current.status not in FINISHED and current.pause_requested:
+                self._r.jobs.set_status(jid, "paused", "pause requested")
+                self._r.jobs.clear_pause(jid)
+            raise JobNotStarted(f"iş #{jid} başlatılmadı ({self.get(jid).status})")
+        job = self.get(jid)  # fresh progress: another process may have advanced it
         base_done = set(job.done_pages)
         base_failed = dict(job.failed)
         base_spent = job.spent_usd

@@ -8,7 +8,8 @@ interface Props {
   api: EngineApi | null;
   bookId: number | null;
   refreshKey: number;
-  onAnalyze: () => void;
+  /** Starts "Kitabı Analiz Et"; `onDone` runs only after the user confirmed and it finished. */
+  onAnalyze: (onDone: () => void) => void;
   onMessage: (m: string) => void;
 }
 
@@ -26,19 +27,24 @@ export function ProfileEditor({ api, bookId, refreshKey, onAnalyze, onMessage }:
   useEffect(() => {
     if (!api || bookId === null) return;
     let cancelled = false;
-    api.getProfile(bookId).then((p) => {
-      if (cancelled || (dirty.current && loadedBook.current === bookId)) return;
-      const prof = p ?? EMPTY;
-      loadedBook.current = bookId;
-      dirty.current = false;
-      setProfile(prof);
-      setRows(Object.entries(prof.sozluk));
-      setLoaded(true);
-    });
+    api.getProfile(bookId).then(
+      (p) => {
+        if (cancelled || (dirty.current && loadedBook.current === bookId)) return;
+        const prof = p ?? EMPTY;
+        loadedBook.current = bookId;
+        dirty.current = false;
+        setProfile(prof);
+        setRows(Object.entries(prof.sozluk));
+        setLoaded(true);
+      },
+      (e: unknown) => {
+        if (!cancelled) onMessage(`Profil yüklenemedi: ${e instanceof Error ? e.message : String(e)}`);
+      },
+    );
     return () => {
       cancelled = true;
     };
-  }, [api, bookId, refreshKey]);
+  }, [api, bookId, refreshKey, onMessage]);
 
   if (!api || bookId === null) return <section className="panel"><p className="muted">Önce bir PDF açın.</p></section>;
 
@@ -51,10 +57,14 @@ export function ProfileEditor({ api, bookId, refreshKey, onAnalyze, onMessage }:
 
   const save = async () => {
     const sozluk = Object.fromEntries(rows.filter(([k, v]) => k.trim() && v.trim()).map(([k, v]) => [k.trim(), v.trim()]));
-    const saved = await api.putProfile(bookId, { ...profile, sozluk });
-    dirty.current = false;
-    setProfile(saved);
-    onMessage("Profil kaydedildi (mevcut çeviriler değişmez; yeniden çeviri için --force).");
+    try {
+      const saved = await api.putProfile(bookId, { ...profile, sozluk });
+      dirty.current = false;
+      setProfile(saved);
+      onMessage("Profil kaydedildi (mevcut çeviriler değişmez; yeniden çeviri için --force).");
+    } catch (e) {
+      onMessage(`Profil kaydedilemedi: ${e instanceof Error ? e.message : String(e)}`);
+    }
   };
 
   return (
@@ -63,10 +73,12 @@ export function ProfileEditor({ api, bookId, refreshKey, onAnalyze, onMessage }:
       {loaded && !profile.tur && <p className="muted">Profil yok. "Kitabı Analiz Et" ile oluşturabilir ya da elle doldurabilirsiniz.</p>}
       <button
         type="button"
-        onClick={() => {
-          dirty.current = false; // a fresh analysis replaces unsaved edits
-          onAnalyze();
-        }}
+        onClick={() =>
+          // Unsaved edits are only given up once the analysis really ran (not on İptal).
+          onAnalyze(() => {
+            dirty.current = false;
+          })
+        }
       >
         Kitabı Analiz Et…
       </button>

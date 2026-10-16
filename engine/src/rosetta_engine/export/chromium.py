@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import shutil
+import signal
 import subprocess
 import tempfile
 from collections.abc import Callable, Sequence
@@ -35,21 +36,34 @@ PrintRunner = Callable[[Sequence[str], float], PrintRun]
 
 
 def run_print(argv: Sequence[str], timeout_s: float) -> PrintRun:
+    """Run Chromium in its own process group; on timeout the whole group is killed (Chromium
+    spawns renderer/GPU helpers that would otherwise outlive it)."""
     try:
-        proc = subprocess.run(
+        proc = subprocess.Popen(
             list(argv),
-            capture_output=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
             text=True,
             encoding="utf-8",
             errors="replace",
-            timeout=timeout_s,
-            check=False,
+            start_new_session=True,
         )
-    except subprocess.TimeoutExpired as e:
-        raise ExportError(f"Chromium {timeout_s:.0f} sn içinde bitmedi") from e
     except OSError as e:
         raise ExportError(f"Chromium çalıştırılamadı: {e}") from e
-    return PrintRun(proc.returncode, proc.stderr)
+    try:
+        _, stderr = proc.communicate(timeout=timeout_s)
+    except subprocess.TimeoutExpired as e:
+        _kill_group(proc)
+        raise ExportError(f"Chromium {timeout_s:.0f} sn içinde bitmedi") from e
+    return PrintRun(proc.returncode, stderr or "")
+
+
+def _kill_group(proc: subprocess.Popen[str]) -> None:
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        proc.kill()
+    proc.communicate()
 
 
 def _playwright_chromium(cache: Path) -> Path | None:

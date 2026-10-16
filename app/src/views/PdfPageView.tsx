@@ -40,9 +40,11 @@ export const PdfPageView = forwardRef<HTMLDivElement, Props>(function PdfPageVie
     if (!doc) return;
     let cancelled = false;
     let task: { cancel: () => void } | null = null;
+    let pageProxy: { cleanup: () => boolean } | null = null;
     (async () => {
       try {
         const p = await doc.getPage(page);
+        pageProxy = p;
         if (cancelled) return;
         // 32 px = the pane's horizontal padding.
         const base = p.getViewport({ scale: 1 });
@@ -76,6 +78,8 @@ export const PdfPageView = forwardRef<HTMLDivElement, Props>(function PdfPageVie
     return () => {
       cancelled = true;
       task?.cancel();
+      // Drop the page's parsed operator lists/images once it is no longer shown.
+      pageProxy?.cleanup();
     };
   }, [doc, page, zoom, onRendered, fitWidth, paneWidth]);
 

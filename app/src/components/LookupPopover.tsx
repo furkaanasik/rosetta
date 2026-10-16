@@ -39,17 +39,21 @@ export function LookupPopover({ api, target, bookId, page, onClose, onSaved, onE
   const pending = !result && !error;
 
   const save = async (unknown: boolean) => {
-    await api.addVocab({
-      word: target.word,
-      sentence: target.sentence,
-      book_id: bookId ?? undefined,
-      page,
-      block_key: target.blockKey ?? undefined,
-      meaning: result?.tr.join(", ") ?? "",
-      unknown,
-    });
-    setSaved(true);
-    onSaved();
+    try {
+      await api.addVocab({
+        word: target.word,
+        sentence: target.sentence,
+        book_id: bookId ?? undefined,
+        page,
+        block_key: target.blockKey ?? undefined,
+        meaning: result?.tr.join(", ") ?? "",
+        unknown,
+      });
+      setSaved(true);
+      onSaved();
+    } catch (e) {
+      setError(`Kaydedilemedi: ${e instanceof Error ? e.message : String(e)}`);
+    }
   };
 
   return (

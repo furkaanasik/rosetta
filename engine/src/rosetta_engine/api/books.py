@@ -15,7 +15,12 @@ from rosetta_engine.api.errors import ApiError, bad_request, not_found
 from rosetta_engine.api.schemas import ExportBody, OpenBookBody, book_info
 from rosetta_engine.errors import ExtractionError
 from rosetta_engine.export.chromium import ExportError, find_chromium
-from rosetta_engine.export.exporter import ExportOptions, export_book
+from rosetta_engine.export.exporter import (
+    ExportOptions,
+    check_output_path,
+    prepare_export,
+    print_export,
+)
 from rosetta_engine.learn.dictionary import Dictionary
 from rosetta_engine.render.html_builder import LearnOptions, build_page_html
 from rosetta_engine.store.learn_repo import VocabRepo
@@ -203,23 +208,24 @@ def export(book_id: int, body: ExportBody, eng: Engine) -> dict[str, Any]:
             if body.out_path
             else out_dir / f"{_safe_title(ob.book.title)}.{body.mode}.pdf"
         )
-        if out.suffix.lower() != ".pdf":
-            raise bad_request("Çıktı yolu .pdf ile bitmeli")
-        out.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            check_output_path(out, ob.book, s.repos)
+        except ExportError as e:
+            raise bad_request(str(e)) from e
         opts = ExportOptions(
             provider=t.name, model=t.model, lang=lang, mode=body.mode, paper=body.paper, pages=pages
         )
-        with ob.lock:
-            result = export_book(
+        with ob.lock:  # only the document work; printing happens outside the lock
+            prepared = prepare_export(
                 ob.book,
                 ob.doc,
                 ob.meta.toc,
                 s.repos,
                 lambda ps: eng.extraction_service(s).ensure_pages(ob.book, ob.doc, ob.meta, ps),
                 opts,
-                out,
                 out_dir,
             )
+        result = print_export(prepared, out)
         return {
             "path": str(result.pdf),
             "pages": len(result.pages),

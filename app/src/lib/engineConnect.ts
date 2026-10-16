@@ -16,9 +16,19 @@ export function isTauri(): boolean {
 export async function connectEngine(): Promise<{ api: EngineApi; mock: boolean }> {
   if (isTauri()) {
     const { invoke } = await import("@tauri-apps/api/core");
-    const info = await waitForEngine(() => invoke<EngineInfo | null>("engine_info"));
-    if (info) return { api: new HttpEngineApi(info), mock: false };
-    throw new Error("Motor başlatılamadı");
+    const { listen } = await import("@tauri-apps/api/event");
+    // The first start of the packaged engine unpacks itself and can take a while: wait up to
+    // ~30 s, but stop early as soon as Rust reports the engine ready or failed.
+    let wake: () => void = () => undefined;
+    const woken = new Promise<void>((r) => (wake = r));
+    const unlisten = await Promise.all([listen("engine-ready", () => wake()), listen("engine-error", () => wake())]);
+    try {
+      const info = await waitForEngine(() => invoke<EngineInfo | null>("engine_info"), 150, 200, woken);
+      if (info) return { api: new HttpEngineApi(info), mock: false };
+      throw new Error("Motor 30 saniyede başlamadı");
+    } finally {
+      unlisten.forEach((u) => u());
+    }
   }
   const url = import.meta.env.VITE_ENGINE_URL as string | undefined;
   const token = import.meta.env.VITE_ENGINE_TOKEN as string | undefined;
@@ -26,15 +36,20 @@ export async function connectEngine(): Promise<{ api: EngineApi; mock: boolean }
   return { api: new MockEngineApi({ latencyMs: 120 }), mock: true };
 }
 
-async function waitForEngine(
+/**
+ * Polls `probe` (which rejects with the engine's error) until it yields an address. `wake`
+ * (engine ready/failed) cuts the current wait short so the next probe answers at once.
+ */
+export async function waitForEngine(
   probe: () => Promise<EngineInfo | null>,
-  tries = 50,
+  tries = 150,
   intervalMs = 200,
+  wake: Promise<void> = new Promise(() => undefined),
 ): Promise<EngineInfo | null> {
   for (let i = 0; i < tries; i++) {
     const info = await probe();
     if (info) return info;
-    await new Promise((r) => setTimeout(r, intervalMs));
+    await Promise.race([new Promise((r) => setTimeout(r, intervalMs)), wake]);
   }
   return null;
 }
@@ -71,9 +86,20 @@ export async function initialPdf(search: string = typeof window !== "undefined" 
   return path && path.trim() ? path : null;
 }
 
-/** PDFs handed over by a second launch while the app is running (Tauri only). */
-export async function onOpenPdf(cb: (path: string) => void): Promise<() => void> {
+/**
+ * A second launch ("Open with Rosetta" while running) stored a PDF for us (Tauri only). The
+ * event is only a signal: the path is drained with `initialPdf()`, so a hand-over that
+ * happened before this listener existed is picked up by the startup drain instead.
+ */
+export async function onOpenPdf(cb: () => void): Promise<() => void> {
   if (!isTauri()) return () => undefined;
   const { listen } = await import("@tauri-apps/api/event");
-  return listen<string>("open-pdf", (e) => cb(e.payload));
+  return listen("open-pdf", () => cb());
+}
+
+/** Engine failures after startup (crash, exit), as reported by the Rust side (Tauri only). */
+export async function onEngineError(cb: (message: string) => void): Promise<() => void> {
+  if (!isTauri()) return () => undefined;
+  const { listen } = await import("@tauri-apps/api/event");
+  return listen<string>("engine-error", (e) => cb(e.payload));
 }

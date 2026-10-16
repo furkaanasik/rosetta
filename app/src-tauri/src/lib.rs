@@ -1,6 +1,8 @@
 //! Rosetta desktop shell: spawns the Python engine sidecar and hands its address to the UI.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, RunEvent, State};
@@ -23,7 +25,16 @@ where
 {
     args.into_iter().skip(1).find_map(|raw| {
         let raw = raw.as_ref();
-        let raw = raw.strip_prefix("file://").unwrap_or(raw);
+        let decoded;
+        let raw = match raw.strip_prefix("file://") {
+            Some(rest) => {
+                // file:///p or file://localhost/p; percent-encoded per RFC 8089.
+                let rest = rest.strip_prefix("localhost").unwrap_or(rest);
+                decoded = percent_decode(rest);
+                decoded.as_str()
+            }
+            None => raw,
+        };
         if raw.starts_with('-') || !raw.to_ascii_lowercase().ends_with(".pdf") {
             return None;
         }
@@ -33,15 +44,38 @@ where
     })
 }
 
-#[derive(Default)]
-struct OpenState {
-    initial: Mutex<Option<String>>,
+/// Decodes `%XX` escapes (UTF-8); malformed escapes are kept as-is.
+pub fn percent_decode(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            let hex = std::str::from_utf8(&bytes[i + 1..i + 3]).ok();
+            if let Some(b) = hex.and_then(|h| u8::from_str_radix(h, 16).ok()) {
+                out.push(b);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
-/// The PDF to open at startup (taken once).
+/// PDF waiting to be opened: the launch argument, then the latest second-instance hand-over.
+/// The frontend drains it on startup and whenever it receives the `open-pdf` signal, so a
+/// hand-over that arrives before the frontend listens is never lost.
+#[derive(Default)]
+struct OpenState {
+    pending: Mutex<Option<String>>,
+}
+
+/// The PDF waiting to be opened (taken once).
 #[tauri::command]
 fn initial_pdf(state: State<'_, OpenState>) -> Option<String> {
-    state.initial.lock().ok().and_then(|mut p| p.take())
+    state.pending.lock().ok().and_then(|mut p| p.take())
 }
 
 #[derive(Default)]
@@ -49,6 +83,8 @@ struct EngineState {
     info: Mutex<Option<EngineInfo>>,
     error: Mutex<Option<String>>,
     child: Mutex<Option<CommandChild>>,
+    terminated: AtomicBool,
+    exiting: AtomicBool,
 }
 
 #[derive(Deserialize)]
@@ -76,8 +112,12 @@ pub fn random_token() -> String {
     buf.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// Dev override: ROSETTA_ENGINE_URL (+ ROSETTA_ENGINE_TOKEN) points at a manually started engine.
+/// Dev override (debug builds only): ROSETTA_ENGINE_URL (+ ROSETTA_ENGINE_TOKEN) points at a
+/// manually started engine.
 fn dev_override() -> Option<EngineInfo> {
+    if !cfg!(debug_assertions) {
+        return None;
+    }
     let url = std::env::var("ROSETTA_ENGINE_URL").ok()?;
     Some(EngineInfo {
         base_url: url.trim_end_matches('/').to_string(),
@@ -94,6 +134,9 @@ fn engine_info(state: State<'_, EngineState>) -> Result<Option<EngineInfo>, Stri
 }
 
 fn set_error(app: &AppHandle, msg: String) {
+    if app.state::<EngineState>().exiting.load(Ordering::SeqCst) {
+        return;
+    }
     eprintln!("rosetta: {msg}");
     if let Ok(mut e) = app.state::<EngineState>().error.lock() {
         *e = Some(msg.clone());
@@ -114,8 +157,14 @@ fn start_engine(app: &AppHandle) {
         return;
     }
     let token = random_token();
+    // The token goes through the environment (owner-only /proc/<pid>/environ), never argv.
+    // A process group lets shutdown reach the Python process behind the PyInstaller bootloader;
+    // the engine also exits on its own when our end of its stdin closes (e.g. if we crash).
     let command = match app.shell().sidecar("rosetta-engine") {
-        Ok(c) => c.args(["serve", "--port", "0", "--token", token.as_str()]),
+        Ok(c) => c
+            .args(["serve", "--port", "0"])
+            .env("ROSETTA_SERVE_TOKEN", token.as_str())
+            .set_process_group(true),
         Err(e) => return set_error(app, format!("Motor bulunamadı: {e}")),
     };
     let (mut rx, child) = match command.spawn() {
@@ -157,6 +206,7 @@ fn start_engine(app: &AppHandle) {
                 }
                 CommandEvent::Error(e) => set_error(&handle, format!("Motor hatası: {e}")),
                 CommandEvent::Terminated(status) => {
+                    handle.state::<EngineState>().terminated.store(true, Ordering::SeqCst);
                     set_error(&handle, format!("Motor durdu (kod {:?})", status.code));
                     break;
                 }
@@ -164,6 +214,27 @@ fn start_engine(app: &AppHandle) {
             }
         }
     });
+}
+
+/// Graceful shutdown: SIGTERM to the engine's process group, a short wait, then SIGKILL.
+fn stop_engine(app: &AppHandle) {
+    let state = app.state::<EngineState>();
+    state.exiting.store(true, Ordering::SeqCst);
+    let Some(child) = state.child.lock().ok().and_then(|mut c| c.take()) else {
+        return;
+    };
+    #[cfg(unix)]
+    {
+        let pgid = child.pid() as libc::pid_t;
+        // SAFETY: plain signal delivery to the group we created for the sidecar.
+        unsafe { libc::killpg(pgid, libc::SIGTERM) };
+        let deadline = Instant::now() + Duration::from_millis(2000);
+        while Instant::now() < deadline && !state.terminated.load(Ordering::SeqCst) {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+    // Reaps the bootloader and SIGKILLs anything left in the group.
+    let _ = child.kill();
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -174,7 +245,11 @@ pub fn run() {
         // A second launch (e.g. "Open with Rosetta" while running) hands its PDF to this window.
         .plugin(tauri_plugin_single_instance::init(|app, argv, cwd| {
             if let Some(path) = pdf_from_args(argv, std::path::Path::new(&cwd)) {
-                let _ = app.emit("open-pdf", path);
+                if let Ok(mut slot) = app.state::<OpenState>().pending.lock() {
+                    *slot = Some(path);
+                }
+                // Signal only; the frontend drains the path with `initial_pdf`.
+                let _ = app.emit("open-pdf", ());
             }
             if let Some(w) = app.get_webview_window("main") {
                 let _ = w.set_focus();
@@ -183,7 +258,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
         .manage(EngineState::default())
-        .manage(OpenState { initial: Mutex::new(initial) })
+        .manage(OpenState { pending: Mutex::new(initial) })
         .invoke_handler(tauri::generate_handler![engine_info, initial_pdf])
         .setup(|app| {
             start_engine(app.handle());
@@ -193,15 +268,7 @@ pub fn run() {
         .expect("Rosetta başlatılamadı")
         .run(|app, event| {
             if let RunEvent::Exit = event {
-                let child = app
-                    .state::<EngineState>()
-                    .child
-                    .lock()
-                    .ok()
-                    .and_then(|mut c| c.take());
-                if let Some(child) = child {
-                    let _ = child.kill();
-                }
+                stop_engine(app);
             }
         });
 }
@@ -237,6 +304,29 @@ mod tests {
         assert_eq!(pdf_from_args(["rosetta", "notes.txt"], &dir), None);
         assert_eq!(pdf_from_args(["rosetta"], &dir), None);
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn file_uri_is_percent_decoded() {
+        let dir = std::env::temp_dir().join(format!("rosetta args sp {}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("Kitap Adı.pdf"), b"%PDF-1.4").unwrap();
+        let abs = dir.join("Kitap Adı.pdf").to_string_lossy().into_owned();
+        let uri = format!(
+            "file://{}",
+            abs.replace(' ', "%20").replace('ı', "%C4%B1")
+        );
+        assert_eq!(pdf_from_args(["rosetta", &uri], &dir), Some(abs.clone()));
+        let localhost = uri.replacen("file://", "file://localhost", 1);
+        assert_eq!(pdf_from_args(["rosetta", &localhost], &dir), Some(abs));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn percent_decode_keeps_malformed_escapes() {
+        assert_eq!(percent_decode("a%20b"), "a b");
+        assert_eq!(percent_decode("100%"), "100%");
+        assert_eq!(percent_decode("%zz%4"), "%zz%4");
     }
 
     #[test]

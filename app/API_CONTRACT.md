@@ -6,22 +6,26 @@ The engine implements them in `rosetta_engine.api` (FastAPI) and is started as t
 ## Startup (sidecar protocol)
 
 ```
-rosetta serve --port 0 --token <64-hex>
+ROSETTA_SERVE_TOKEN=<64-hex> rosetta serve --port 0      # stdin: a pipe kept open by the app
 ```
 
+- The token comes from the environment (`/proc/<pid>/environ` is owner-only), never argv
+  (`/proc/<pid>/cmdline` is world-readable). `--token` exists only for manual dev use.
 - Bind **127.0.0.1 only**. `--port 0` means pick a free port.
 - When ready, print **one JSON line to stdout**: `{"port": 41234, "token": "<same token>"}` and flush.
   Nothing else may be printed to stdout before it (logs → stderr). The Rust side parses the first
   JSON line and checks that `token` matches.
-- The process is killed when the app exits; no cleanup is required beyond SQLite's WAL.
-- Dev: `ROSETTA_ENGINE_URL=http://127.0.0.1:8765 ROSETTA_ENGINE_TOKEN=x npm run tauri dev`
+- Lifetime: the engine exits when its stdin reaches EOF (the app closed or crashed) and on
+  SIGTERM. On exit the app sends SIGTERM to the sidecar's process group (which also reaches the
+  Python process behind the PyInstaller bootloader), waits up to 2 s, then SIGKILLs the group.
+- Dev (debug builds only): `ROSETTA_ENGINE_URL=http://127.0.0.1:8765 ROSETTA_ENGINE_TOKEN=x npm run tauri dev`
   (or `VITE_ENGINE_URL` / `VITE_ENGINE_TOKEN` for `npm run dev` in a browser).
 
 ## Conventions
 
 - Base: `http://127.0.0.1:<port>`; every route below is under `/api`.
-- Auth: `Authorization: Bearer <token>` on every request (401 otherwise). Exception: asset
-  images, which accept `?token=<token>` because `<img>` can't send headers.
+- Auth: `Authorization: Bearer <token>` on every request (401 otherwise). The app fetches asset
+  images with the header and shows them as `blob:` URLs, so the token never appears in the DOM.
 - CORS: allow origins `tauri://localhost`, `http://tauri.localhost`, `http://localhost:1420`.
 - JSON in/out, UTF-8. **Page numbers are 1-based** everywhere in the API.
 - `BlockInfo.key` equals the `data-block` attribute the HTML builder emits (currently `"{page_no0}-{order}"`).
@@ -33,6 +37,7 @@ rosetta serve --port 0 --token <64-hex>
 | `unauthorized` | 401 | missing/bad token |
 | `not_found` | 404 | unknown book/job/vocab |
 | `expired_token` | 409 | confirm token unknown, used or expired |
+| `conflict` | 409 | the book's file changed at its stored path (reopen the PDF) |
 | `invalid` | 422 | provider returned invalid output after retry |
 | `usage_limit` | 429 | Claude usage limit (job → paused) |
 | `budget` | 402 | per-call budget cap or job budget reached |
@@ -58,6 +63,7 @@ Estimate {
   thinking: string|null; thinking_extra_tokens: number;
   total_blocks: number; cached_blocks: number; pages: number[];
   supports_profile: boolean; expires_in: number;
+  warnings?: string[];   // shown in the cost modal before "Onayla" (e.g. budget can't be pre-applied: unknown price)
 }
 ```
 
@@ -76,7 +82,7 @@ Estimate {
 | GET | `/api/books/{id}/toc` | – | `[{level, title, page}]` |
 | GET | `/api/books/{id}/pages/{n}/blocks` | – | `PageBlocks {page, width, height, has_text_layer, blocks: [{key, order, type, bbox:[x0,y0,x1,y1] (PDF pt, top-left origin), translatable, translated}]}` (extracts on demand) |
 | GET | `/api/books/{id}/pages/{n}/html` | `?mode=tr\|review\|learn&lang=tr` | `PageHtml {page, mode, html, translated_blocks, translatable_blocks}` |
-| GET | `/api/books/{id}/assets/{name}` | `?token=` | image bytes (figure/table crops) |
+| GET | `/api/books/{id}/assets/{name}` | – | image bytes (figure/table crops), fetched with the Bearer header |
 | GET | `/api/books/{id}/file` | – (Bearer only) | the PDF bytes (`application/pdf`); used by the app in a plain browser (dev/E2E), where it cannot read the local path |
 
 `html` is a **fragment** (no `<html>`, `<head>`, `<script>`, `<link>`), built by the engine's

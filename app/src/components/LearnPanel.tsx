@@ -12,6 +12,13 @@ const RATINGS: { r: Rating; label: string }[] = [
   { r: "easy", label: "Kolay" },
 ];
 
+/** Small inline error line for one sub-panel; `report` is a ready-made rejection handler. */
+function useErrorLine(): [string | null, (e: unknown) => void] {
+  const [err, setErr] = useState<string | null>(null);
+  const report = useCallback((e: unknown) => setErr(e instanceof Error ? e.message : String(e)), []);
+  return [err, report];
+}
+
 interface Props {
   api: EngineApi | null;
   bookId: number | null;
@@ -43,12 +50,14 @@ function VocabList({ api, refreshKey, onChange }: { api: EngineApi; refreshKey: 
   const [items, setItems] = useState<VocabItem[]>([]);
   const [search, setSearch] = useState("");
   const latest = useLatest();
-  const load = useCallback(() => latest(api.listVocab({ search: search || undefined }), setItems), [api, search, latest]);
+  const [err, report] = useErrorLine();
+  const load = useCallback(() => latest(api.listVocab({ search: search || undefined }), setItems, report), [api, search, latest, report]);
   useEffect(() => {
     void load();
   }, [load, refreshKey]);
   return (
     <>
+      {err && <p className="error">{err}</p>}
       <input aria-label="Kelime ara" placeholder="Ara…" value={search} onChange={(e) => setSearch(e.target.value)} />
       {items.length === 0 && <p className="muted">Kelime defteri boş. Metinde bir kelimeye tıklayıp kaydedin.</p>}
       <ul className="vocab">
@@ -59,7 +68,7 @@ function VocabList({ api, refreshKey, onChange }: { api: EngineApi; refreshKey: 
               <input
                 type="checkbox"
                 checked={v.unknown}
-                onChange={(e) => void api.setUnknown(v.id, e.target.checked).then(() => (load(), onChange()))}
+                onChange={(e) => void api.setUnknown(v.id, e.target.checked).then(() => (load(), onChange()), report)}
               />{" "}
               bilmiyorum
             </label>
@@ -74,20 +83,26 @@ function Review({ api, onChange }: { api: EngineApi; onChange: () => void }) {
   const [cards, setCards] = useState<ReviewCard[] | null>(null);
   const [flipped, setFlipped] = useState(false);
   const latest = useLatest();
+  const [err, report] = useErrorLine();
   useEffect(() => {
-    void latest(api.dueCards(50), setCards);
-  }, [api, latest]);
-  if (!cards) return <p className="muted">Yükleniyor…</p>;
+    void latest(api.dueCards(50), setCards, report);
+  }, [api, latest, report]);
+  if (!cards) return err ? <p className="error">{err}</p> : <p className="muted">Yükleniyor…</p>;
   const card = cards[0];
   if (!card) return <p className="muted">Bugün tekrar edilecek kart yok. 🎉</p>;
   const rate = async (r: Rating) => {
-    await api.review(card.vocab_id, r);
-    setCards(cards.slice(1));
-    setFlipped(false);
-    onChange();
+    try {
+      await api.review(card.vocab_id, r);
+      setCards(cards.slice(1));
+      setFlipped(false);
+      onChange();
+    } catch (e) {
+      report(e);
+    }
   };
   return (
     <div className="card">
+      {err && <p className="error">{err}</p>}
       <p className="small muted">{cards.length} kart kaldı</p>
       <p className="cloze">{card.front}</p>
       {!flipped ? (
@@ -110,9 +125,10 @@ function Review({ api, onChange }: { api: EngineApi; onChange: () => void }) {
 function Terms({ api, bookId, onChange }: { api: EngineApi; bookId: number | null; onChange: () => void }) {
   const [terms, setTerms] = useState<TermInfo[]>([]);
   const latest = useLatest();
+  const [err, report] = useErrorLine();
   const load = useCallback(
-    () => (bookId === null ? latest(Promise.resolve([]), setTerms) : latest(api.terms(bookId), setTerms)),
-    [api, bookId, latest],
+    () => (bookId === null ? latest(Promise.resolve([]), setTerms) : latest(api.terms(bookId), setTerms, report)),
+    [api, bookId, latest, report],
   );
   useEffect(() => {
     void load();
@@ -120,9 +136,10 @@ function Terms({ api, bookId, onChange }: { api: EngineApi; bookId: number | nul
   if (bookId === null) return <p className="muted">Önce bir PDF açın.</p>;
   return (
     <>
+      {err && <p className="error">{err}</p>}
       {terms.length === 0 && <p className="muted">Profilde sözlük terimi yok.</p>}
       {terms.length > 0 && (
-        <button type="button" onClick={() => void api.addTerms(bookId).then(() => (load(), onChange()))}>
+        <button type="button" onClick={() => void api.addTerms(bookId).then(() => (load(), onChange()), report)}>
           Tümünü deftere ekle
         </button>
       )}
@@ -140,10 +157,11 @@ function Terms({ api, bookId, onChange }: { api: EngineApi; bookId: number | nul
 function Stats({ api, refreshKey }: { api: EngineApi; refreshKey: number }) {
   const [s, setS] = useState<LearnStats | null>(null);
   const latest = useLatest();
+  const [err, report] = useErrorLine();
   useEffect(() => {
-    void latest(api.stats(), setS);
-  }, [api, refreshKey, latest]);
-  if (!s) return <p className="muted">Yükleniyor…</p>;
+    void latest(api.stats(), setS, report);
+  }, [api, refreshKey, latest, report]);
+  if (!s) return err ? <p className="error">{err}</p> : <p className="muted">Yükleniyor…</p>;
   return (
     <dl className="stats">
       <dt>Toplam kelime</dt><dd>{s.total_words}</dd>

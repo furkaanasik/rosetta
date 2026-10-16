@@ -13,7 +13,7 @@ function Root() {
       .catch((e: unknown) => setConn({ api: null, mock: false, error: String(e) }));
   }, []);
   if (!conn) return <div className="splash">Rosetta başlatılıyor…</div>;
-  return <App api={conn.api} mock={conn.mock} />;
+  return <App api={conn.api} mock={conn.mock} engineError={conn.error ?? null} />;
 }
 
 const el = document.getElementById("root");

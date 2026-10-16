@@ -11,8 +11,17 @@ export interface OutlineItem {
   level: number;
 }
 
+/** Same-origin PDF.js data (see vite.config.ts `pdfjsAssets`). */
+const ASSETS = {
+  cMapUrl: "/pdfjs/cmaps/",
+  cMapPacked: true,
+  standardFontDataUrl: "/pdfjs/standard_fonts/",
+  wasmUrl: "/pdfjs/wasm/",
+  iccUrl: "/pdfjs/iccs/",
+};
+
 export async function loadPdf(src: string | ArrayBuffer): Promise<PdfDoc> {
-  const task = pdfjs.getDocument(typeof src === "string" ? { url: src } : { data: src });
+  const task = pdfjs.getDocument(typeof src === "string" ? { ...ASSETS, url: src } : { ...ASSETS, data: src });
   return task.promise;
 }
 

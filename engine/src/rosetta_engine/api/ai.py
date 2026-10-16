@@ -10,7 +10,7 @@ from typing import Any
 from fastapi import APIRouter, Query
 
 from rosetta_engine.api.deps import Engine
-from rosetta_engine.api.errors import bad_request, not_found
+from rosetta_engine.api.errors import ApiError, bad_request, not_found
 from rosetta_engine.api.schemas import (
     ConfirmBody,
     ExplainEstimateBody,
@@ -23,7 +23,7 @@ from rosetta_engine.api.schemas import (
 )
 from rosetta_engine.api.state import EngineState, OpenBook, Session
 from rosetta_engine.explain.explainer import Explainer, ExplainPlan, Explanation, render_text
-from rosetta_engine.jobs.runner import FINISHED, JobError, JobRunner
+from rosetta_engine.jobs.runner import BUDGET_NO_PRICE, FINISHED, JobError, JobRunner
 from rosetta_engine.models import BookProfile, TranslationPlan
 from rosetta_engine.profile.profiler import ProfilePlan, Profiler
 from rosetta_engine.store.repo import JobRow
@@ -81,6 +81,7 @@ def _plan_estimate(
     plan: TranslationPlan,
     p: _Provider,
     t: Translator,
+    warnings: list[str] | None = None,
 ) -> dict[str, Any]:
     op: Operation = "translate" if operation == "translate" else "job"
     return estimate(
@@ -96,6 +97,7 @@ def _plan_estimate(
         total_blocks=plan.total_blocks,
         cached_blocks=plan.cached_blocks,
         supports_profile=supports_profile(t),
+        warnings=warnings,
     )
 
 
@@ -129,10 +131,11 @@ def translate_estimate(book_id: int, body: TranslateEstimateBody, eng: Engine) -
 @router.post("/books/{book_id}/translate")
 def translate(book_id: int, body: ConfirmBody, eng: Engine) -> dict[str, Any]:
     scope = f"book:{book_id}"
-    payload: _TranslatePayload = eng.confirm.take(body.confirm_token, "translate", scope)
-    with eng.db() as s:
-        svc, _ = _service(eng, s, payload.provider)
-        result = svc.execute(payload.plan, profile=payload.profile)
+    with eng.ai_call():
+        payload: _TranslatePayload = eng.confirm.take(body.confirm_token, "translate", scope)
+        with eng.db() as s:
+            svc, _ = _service(eng, s, payload.provider)
+            result = svc.execute(payload.plan, profile=payload.profile)
     return report(result)
 
 
@@ -162,8 +165,11 @@ def _job_model(job_provider: str, job_model: str) -> str | None:
     return job_model
 
 
-def _run_job(eng: EngineState, job_id: int, p: _Provider, reset_failed: bool = False) -> None:
-    """Background thread body: own SQLite connection; plan under the book lock, then run."""
+def _run_job(eng: EngineState, job_id: int, p: _Provider, only: list[int] | None = None) -> None:
+    """Background thread body: own SQLite connection; plan under the book lock, then run.
+
+    ``only`` = exactly the pages the user confirmed (resume/retry); None for a new job, whose
+    confirmed page set is the job itself."""
     try:
         with eng.db() as s:
             svc, t = _service(eng, s, p)
@@ -173,11 +179,15 @@ def _run_job(eng: EngineState, job_id: int, p: _Provider, reset_failed: bool = F
             profile = _profile(s, current.book_id, t)
             try:
                 with ob.lock:
-                    plan = runner.plan(current, ob.doc, ob.meta, ob.book, profile=profile)
+                    plan = runner.plan(
+                        current, ob.doc, ob.meta, ob.book, profile=profile, only=only
+                    )
             except Exception as e:
                 s.repos.jobs.set_status(job_id, "paused", f"planlama hatası: {e}")
                 raise
             runner.run(current, plan, profile=profile)
+    except JobError as e:
+        log.info("job %d not run: %s", job_id, e)
     except Exception:
         log.exception("job %d failed", job_id)
 
@@ -205,25 +215,29 @@ def job_estimate(book_id: int, body: JobEstimateBody, eng: Engine) -> dict[str, 
             plan = svc.plan(ob.book, ob.doc, ob.meta, pages, lang, profile=_profile(s, book_id, t))
     payload = _JobPayload(book_id, pages, lang, p, body.budget_usd)
     token = eng.confirm.issue("job", "new", payload)
-    return _plan_estimate(eng, token, "job", plan, p, t)
+    warnings = (
+        [BUDGET_NO_PRICE] if body.budget_usd is not None and not plan.estimate.price_known else []
+    )
+    return _plan_estimate(eng, token, "job", plan, p, t, warnings)
 
 
 @router.post("/jobs")
 def job_start(body: ConfirmBody, eng: Engine) -> dict[str, Any]:
-    payload: _JobPayload = eng.confirm.take(body.confirm_token, "job", "new")
-    with eng.db() as s:
-        ob = eng.book(s, payload.book_id)
-        t = _translator(eng, payload.provider)
-        created = JobRunner(None, s.repos).create(
-            ob.book,
-            payload.pages,
-            _format_pages(payload.pages),
-            payload.lang,
-            t.name,
-            t.model,
-            payload.budget_usd,
-        )
-    eng.start_job_thread(created.id, lambda: _run_job(eng, created.id, payload.provider))
+    with eng.job_slot() as start:  # busy → 503 before the token is consumed or a row exists
+        payload: _JobPayload = eng.confirm.take(body.confirm_token, "job", "new")
+        with eng.db() as s:
+            ob = eng.book(s, payload.book_id)
+            t = _translator(eng, payload.provider)
+            created = JobRunner(None, s.repos).create(
+                ob.book,
+                payload.pages,
+                _format_pages(payload.pages),
+                payload.lang,
+                t.name,
+                t.model,
+                payload.budget_usd,
+            )
+        start(created.id, lambda: _run_job(eng, created.id, payload.provider))
     with eng.db() as s:
         return job(_job_or_404(s, created.id))
 
@@ -266,6 +280,16 @@ def _resumable(eng: EngineState, job_id: int) -> None:
         raise bad_request(f"İş #{job_id} zaten çalışıyor")
 
 
+@dataclass(frozen=True)
+class _ContinuePayload:
+    provider: _Provider
+    pages: tuple[int, ...]  # exactly the pages the estimate covered (0-based)
+
+
+def _continue_pages(current: JobRow, failed_only: bool) -> list[int]:
+    return sorted(current.failed) if failed_only else current.remaining
+
+
 def _job_plan_estimate(
     eng: EngineState, job_id: int, operation: str, *, failed_only: bool
 ) -> dict[str, Any]:
@@ -274,7 +298,7 @@ def _job_plan_estimate(
         current = _job_or_404(s, job_id)
         if current.status in FINISHED and current.status != "failed":
             raise bad_request(f"İş #{job_id} zaten bitti ({current.status})")
-        only = sorted(current.failed) if failed_only else current.remaining
+        only = _continue_pages(current, failed_only)
         if not only:
             what = "hatalı sayfa" if failed_only else "kalan sayfa"
             raise bad_request(f"İş #{job_id}: {what} yok")
@@ -285,8 +309,37 @@ def _job_plan_estimate(
             plan = JobRunner(svc, s.repos).plan(
                 current, ob.doc, ob.meta, ob.book, profile=_profile(s, ob.book.id, t), only=only
             )
-    token = eng.confirm.issue(operation, f"job:{job_id}", p)
-    return _plan_estimate(eng, token, operation, plan, p, t)
+    token = eng.confirm.issue(operation, f"job:{job_id}", _ContinuePayload(p, tuple(only)))
+    warnings = (
+        [BUDGET_NO_PRICE]
+        if current.budget_usd is not None and not plan.estimate.price_known
+        else []
+    )
+    return _plan_estimate(eng, token, operation, plan, p, t, warnings)
+
+
+def _job_continue(
+    eng: EngineState, job_id: int, token: str | None, operation: str, *, failed_only: bool
+) -> dict[str, Any]:
+    """Run exactly the confirmed pages; refuse if the job's page set changed since the
+    estimate (409 expired_token → the app asks for a new estimate)."""
+    _resumable(eng, job_id)
+    with eng.job_slot() as start:
+        payload: _ContinuePayload = eng.confirm.take(token, operation, f"job:{job_id}")
+        with eng.db() as s:
+            current = _job_or_404(s, job_id)
+            if tuple(_continue_pages(current, failed_only)) != payload.pages:
+                raise ApiError(
+                    "expired_token", "İşin sayfaları tahminden sonra değişti; yeniden tahmin al"
+                )
+            try:
+                JobRunner(None, s.repos).prepare_continue(job_id)
+            except JobError as e:
+                raise bad_request(str(e)) from e
+        only = list(payload.pages)
+        start(job_id, lambda: _run_job(eng, job_id, payload.provider, only))
+    with eng.db() as s:
+        return job(_job_or_404(s, job_id))
 
 
 @router.post("/jobs/{job_id}/resume/estimate")
@@ -296,13 +349,7 @@ def job_resume_estimate(job_id: int, eng: Engine) -> dict[str, Any]:
 
 @router.post("/jobs/{job_id}/resume")
 def job_resume(job_id: int, body: ConfirmBody, eng: Engine) -> dict[str, Any]:
-    p: _Provider = eng.confirm.take(body.confirm_token, "resume", f"job:{job_id}")
-    _resumable(eng, job_id)
-    with eng.db() as s:
-        _job_or_404(s, job_id)
-    eng.start_job_thread(job_id, lambda: _run_job(eng, job_id, p))
-    with eng.db() as s:
-        return job(_job_or_404(s, job_id))
+    return _job_continue(eng, job_id, body.confirm_token, "resume", failed_only=False)
 
 
 @router.post("/jobs/{job_id}/retry-failed/estimate")
@@ -312,17 +359,7 @@ def job_retry_estimate(job_id: int, eng: Engine) -> dict[str, Any]:
 
 @router.post("/jobs/{job_id}/retry-failed")
 def job_retry(job_id: int, body: ConfirmBody, eng: Engine) -> dict[str, Any]:
-    p: _Provider = eng.confirm.take(body.confirm_token, "retry", f"job:{job_id}")
-    _resumable(eng, job_id)
-    with eng.db() as s:
-        _job_or_404(s, job_id)
-        try:
-            JobRunner(None, s.repos).reset_failed(job_id)
-        except JobError as e:
-            raise bad_request(str(e)) from e
-    eng.start_job_thread(job_id, lambda: _run_job(eng, job_id, p))
-    with eng.db() as s:
-        return job(_job_or_404(s, job_id))
+    return _job_continue(eng, job_id, body.confirm_token, "retry", failed_only=True)
 
 
 # --- book profile ------------------------------------------------------------------------------
@@ -383,9 +420,10 @@ def profile_estimate(book_id: int, eng: Engine) -> dict[str, Any]:
 
 @router.post("/books/{book_id}/profile/analyze")
 def profile_analyze(book_id: int, body: ConfirmBody, eng: Engine) -> dict[str, Any]:
-    plan: ProfilePlan = eng.confirm.take(body.confirm_token, "profile", f"book:{book_id}")
-    with eng.db() as s:
-        return _profile_json(_profiler(eng, s).run(plan))
+    with eng.ai_call():
+        plan: ProfilePlan = eng.confirm.take(body.confirm_token, "profile", f"book:{book_id}")
+        with eng.db() as s:
+            return _profile_json(_profiler(eng, s).run(plan))
 
 
 # --- "Bunu açıkla" ------------------------------------------------------------------------------
@@ -437,6 +475,7 @@ def explain_estimate(body: ExplainEstimateBody, eng: Engine) -> dict[str, Any]:
 
 @router.post("/explain")
 def explain(body: ConfirmBody, eng: Engine) -> dict[str, Any]:
-    plan: ExplainPlan = eng.confirm.take(body.confirm_token, "explain", "explain")
-    with eng.db() as s:
-        return _explanation(_explainer(eng, s).run(plan))
+    with eng.ai_call():
+        plan: ExplainPlan = eng.confirm.take(body.confirm_token, "explain", "explain")
+        with eng.db() as s:
+            return _explanation(_explainer(eng, s).run(plan))

@@ -125,16 +125,19 @@ def vocab_add(body: VocabCreateBody, eng: Engine) -> dict[str, Any]:
             raise not_found(f"Kitap bulunamadı: #{body.book_id}")
         where = _where(eng, lr, body)
         profile = lr.s.repos.profiles.get(body.book_id) if body.book_id is not None else None
-        saved = lr.notebook.save(
-            body.word,
-            book_id=body.book_id,
-            page=where.page,
-            sentence=where.sentence,
-            meaning=body.meaning,
-            unknown=body.unknown,
-            location=where.location,
-            glossary=profile.glossary if profile else None,
-        )
+        try:
+            saved = lr.notebook.save(
+                body.word,
+                book_id=body.book_id,
+                page=where.page,
+                sentence=where.sentence,
+                meaning=body.meaning,
+                unknown=body.unknown,
+                location=where.location,
+                glossary=profile.glossary if profile else None,
+            )
+        except ValueError as e:
+            raise bad_request(str(e)) from e
         return vocab(saved.vocab)
 
 

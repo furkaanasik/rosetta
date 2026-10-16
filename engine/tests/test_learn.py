@@ -354,7 +354,8 @@ def test_stats(learn: Learn, repos: Repos, clock: Clock) -> None:
     assert s.total_words == 2
     assert s.unknown_words == 1
     assert s.reviewed_today == 1
-    assert s.due_today == 1  # "go" is new and due now; "latency" moved days ahead
+    # "latency" moved days ahead; "go" is marked known, so it is not in the review queue
+    assert s.due_today == 0
     assert s.streak_days == 1
     assert s.mature_words == 0
 
@@ -402,3 +403,30 @@ def test_meaning_falls_back_to_book_glossary(learn: Learn) -> None:
     assert polled.vocab.meaning == "yoklama"
     assert by_dict.vocab.meaning == "gecikme"  # dictionary wins when it has Turkish
     assert none.vocab.meaning == ""
+
+
+def test_marking_a_word_known_removes_it_from_due(learn: Learn) -> None:
+    notebook, _vocab, srs = learn
+    a = notebook.save("latency").vocab
+    assert [c.vocab_id for c in srs.due()] == [a.id]
+
+    notebook.mark("latency", unknown=False)
+
+    assert srs.due() == []
+
+
+def test_blank_word_is_rejected(learn: Learn) -> None:
+    notebook, _vocab, _ = learn
+    with pytest.raises(ValueError):
+        notebook.save("   ")
+
+
+def test_vocab_add_is_race_safe_and_like_is_literal(learn: Learn) -> None:
+    _notebook, vocab, _ = learn
+    first, created = vocab.add(word="a_b", lemma="a_b", sentence="100% sure")
+    again, created_again = vocab.add(word="a_b", lemma="a_b")
+    vocab.add(word="axb", lemma="axb", sentence="1000 sure")
+
+    assert created and not created_again and again.id == first.id
+    assert [v.lemma for v in vocab.query(search="a_b")] == ["a_b"]  # "_" is not a wildcard
+    assert [v.lemma for v in vocab.query(search="0%")] == ["a_b"]  # "%" is literal

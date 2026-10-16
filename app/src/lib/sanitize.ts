@@ -1,49 +1,83 @@
+import DOMPurify from "dompurify";
+
 /**
  * Defence in depth for engine-produced HTML. The engine already escapes all book and model
- * text; here we still drop anything executable and rewrite asset URLs.
+ * text; here an allowlist (DOMPurify) keeps only the markup the engine emits.
+ *
+ * Images are never given a URL here: `<img src="assets/x.png">` becomes
+ * `<img data-asset="x.png">` and the pane loads it with the bearer token (blob URL), so the
+ * token never appears in the DOM.
  */
-const DROP_TAGS = new Set([
-  "script",
-  "iframe",
-  "object",
-  "embed",
-  "link",
-  "meta",
-  "base",
-  "form",
-  "input",
-  "button",
-  "textarea",
-  "select",
-  "style",
-]);
+const ALLOWED_TAGS = [
+  "main", "section", "article", "header", "footer", "nav", "div", "span", "p", "br", "hr",
+  "h1", "h2", "h3", "h4", "h5", "h6", "blockquote", "aside",
+  "ul", "ol", "li", "pre", "code", "kbd", "samp",
+  "em", "strong", "b", "i", "u", "s", "sub", "sup", "small", "mark",
+  "figure", "figcaption", "img",
+  "table", "thead", "tbody", "tfoot", "tr", "th", "td", "caption", "colgroup", "col",
+  "ruby", "rt", "rp",
+];
 
-export function sanitizeEngineHtml(html: string, assetUrl: (name: string) => string): string {
-  const doc = new DOMParser().parseFromString(`<div id="root">${html}</div>`, "text/html");
-  const root = doc.getElementById("root");
-  if (!root) return "";
-  const all = Array.from(root.querySelectorAll("*"));
-  for (const el of all) {
-    if (DROP_TAGS.has(el.tagName.toLowerCase())) {
-      el.remove();
-      continue;
+const ALLOWED_ATTR = [
+  "class", "title", "lang", "id", "value", "start", "src", "alt", "role", "aria-hidden",
+  "aria-label", "colspan", "rowspan", "style",
+];
+
+/** The only inline style the engine writes: the original point size (rule 4, no shrinking). */
+const FONT_SIZE_STYLE = /^\s*font-size:\s*calc\(var\(--scale\)\s*\*\s*\d+(\.\d+)?pt\)\s*;?\s*$/;
+const ASSET_NAME = /^[A-Za-z0-9._-]+\.(png|jpe?g|webp)$/i;
+
+let hooksInstalled = false;
+const pendingAssets = new WeakMap<Node, string>();
+
+function installHooks(purify: typeof DOMPurify): void {
+  if (hooksInstalled) return;
+  hooksInstalled = true;
+  purify.addHook("uponSanitizeAttribute", (node, data) => {
+    const name = data.attrName;
+    if (name === "style") {
+      data.keepAttr = FONT_SIZE_STYLE.test(data.attrValue);
+    } else if (name === "src") {
+      // Only engine assets survive, and only as data-asset (see module doc).
+      const value = data.attrValue.trim();
+      data.keepAttr = false;
+      if (node.nodeName === "IMG" && value.startsWith("assets/")) {
+        const asset = value.slice("assets/".length);
+        if (ASSET_NAME.test(asset)) pendingAssets.set(node, asset);
+      }
+    } else if (name === "data-asset") {
+      // Never trust a data-asset attribute coming from the input itself.
+      data.keepAttr = false;
     }
-    for (const attr of Array.from(el.attributes)) {
-      const name = attr.name.toLowerCase();
-      const value = attr.value.trim().toLowerCase();
-      if (name.startsWith("on")) el.removeAttribute(attr.name);
-      else if ((name === "href" || name === "src" || name === "xlink:href") && value.startsWith("javascript:"))
-        el.removeAttribute(attr.name);
+  });
+  purify.addHook("afterSanitizeAttributes", (node) => {
+    const asset = pendingAssets.get(node);
+    if (asset !== undefined) {
+      (node as Element).setAttribute("data-asset", asset);
+      pendingAssets.delete(node);
     }
-    if (el.tagName.toLowerCase() === "img") {
-      const src = el.getAttribute("src") ?? "";
-      if (src.startsWith("assets/")) el.setAttribute("src", assetUrl(src.slice("assets/".length)));
-      else if (!/^(https?:|data:image\/)/i.test(src)) el.removeAttribute("src");
-    }
-  }
+  });
+}
+
+/** Valid engine asset name (as produced by the sanitizer's data-asset). */
+export function isAssetName(name: string): boolean {
+  return ASSET_NAME.test(name);
+}
+
+export function sanitizeEngineHtml(html: string): string {
+  installHooks(DOMPurify);
+  const fragment = DOMPurify.sanitize(html, {
+    ALLOWED_TAGS,
+    ALLOWED_ATTR,
+    ALLOW_DATA_ATTR: true,
+    ALLOW_ARIA_ATTR: false,
+    RETURN_DOM_FRAGMENT: true,
+    KEEP_CONTENT: true,
+  });
+
   // Code callouts ❶–❿ (U+2776–U+277F) need a symbol font that may not be installed: draw them
   // as CSS circles with the plain digit instead.
-  for (const el of Array.from(root.querySelectorAll<HTMLElement>(".callout"))) {
+  for (const el of Array.from(fragment.querySelectorAll<HTMLElement>(".callout"))) {
     const code = (el.textContent ?? "").trim().codePointAt(0) ?? 0;
     if (code >= 0x2776 && code <= 0x277f) {
       const n = String(code - 0x2775);
@@ -52,5 +86,7 @@ export function sanitizeEngineHtml(html: string, assetUrl: (name: string) => str
       el.setAttribute("aria-label", n);
     }
   }
-  return root.innerHTML;
+  const holder = document.createElement("div");
+  holder.appendChild(fragment);
+  return holder.innerHTML;
 }

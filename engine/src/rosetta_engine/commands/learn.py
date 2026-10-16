@@ -156,6 +156,8 @@ def vocab_add(
     """Kelimeyi bağlamıyla deftere kaydet ve kart oluştur."""
     if page is not None and book is None:
         raise typer.BadParameter("--page için --book gerekli", param_hint="--page")
+    if not word.strip():
+        raise typer.BadParameter("boş kelime kaydedilemez", param_hint="WORD")
     with _learn() as lr:
         _no_dictionary_note(lr)
         if book is None:

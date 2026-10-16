@@ -375,3 +375,24 @@ def test_cli_page_out_of_range(env: Path, monkeypatch: pytest.MonkeyPatch, book_
     assert result.exit_code == 1
     assert "out of range" in result.output
     assert fake.calls == []
+
+
+def test_strip_controls_removes_terminal_escapes() -> None:
+    from rosetta_engine.textsafe import strip_controls
+
+    raw = "ok\x1b[2J\x1b]0;pwned\x07 line\r\nnext\ttab\x9b31m"
+
+    assert strip_controls(raw) == "ok[2J]0;pwned line\nnext\ttab31m"
+
+
+def test_cli_never_prints_escape_sequences_from_the_model(
+    env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    evil = dict(ANSWER, ceviri="Çeviri\x1b]0;pwned\x07\x1b[2J bitti")
+    _fake(monkeypatch, [evil])
+
+    result = runner.invoke(cli.app, ["explain", SENTENCE, "--yes"])
+
+    assert result.exit_code == 0, result.output
+    assert "\x1b]0;" not in result.output and "\x1b[2J" not in result.output
+    assert "bitti" in result.output

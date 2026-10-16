@@ -72,7 +72,9 @@ err = Console(stderr=True)
 PdfArg = Annotated[Path, typer.Argument(exists=True, dir_okay=False, readable=True, help="PDF")]
 PagesOpt = Annotated[str, typer.Option("--pages", "-p", help="1-based: 41 | 41-44 | 41,43,50-52")]
 LangOpt = Annotated[str | None, typer.Option("--lang", help="Target language (default: config)")]
-ProviderOpt = Annotated[str | None, typer.Option("--provider", help="claude-cli | fake")]
+ProviderOpt = Annotated[
+    str | None, typer.Option("--provider", help="claude-cli | fake | deepl | ollama")
+]
 ModelOpt = Annotated[str | None, typer.Option("--model", help="Model (default: config)")]
 
 

@@ -8,6 +8,8 @@ numbers (or without the TOC page at all). Never calls an AI provider.
 from __future__ import annotations
 
 import logging
+import os
+import uuid
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -83,20 +85,43 @@ def count_untranslated(
     return total, missing, missing_pages
 
 
-def export_book(
+@dataclass(frozen=True)
+class PreparedExport:
+    """Everything rendered from the document; printing needs no PDF/doc access any more."""
+
+    book: Book
+    opts: ExportOptions
+    pages: list[int]
+    sections: Sequence[Section]
+    toc: Sequence[TocItem]
+    total_blocks: int
+    untranslated_blocks: int
+    untranslated_pages: list[int]
+    work_dir: Path
+
+
+def check_output_path(out_pdf: Path, book: Book, repos: Repos) -> None:
+    """Refuse to write over a source PDF (this book's or any other known book's)."""
+    target = out_pdf.expanduser().resolve()
+    sources = {Path(p).expanduser().resolve() for p in repos.books.file_paths()}
+    if book.file_path:
+        sources.add(Path(book.file_path).expanduser().resolve())
+    if target in sources:
+        raise ExportError(f"Çıktı yolu bir kaynak PDF'in üstüne yazardı: {target}")
+    if target.suffix.lower() != ".pdf":
+        raise ExportError("Çıktı yolu .pdf ile bitmeli")
+
+
+def prepare_export(
     book: Book,
     doc: pymupdf.Document,
     toc_source: Sequence[TocSource],
     repos: Repos,
     ensure_pages: EnsurePages,
     opts: ExportOptions,
-    out_pdf: Path,
     work_dir: Path,
-    *,
-    browser: Path | None = None,
-    runner: PrintRunner = run_print,
-    timeout_s: float = DEFAULT_TIMEOUT_S,
-) -> ExportResult:
+) -> PreparedExport:
+    """Phase 1 (needs the document, e.g. under its lock): blocks, translations, crops, TOC."""
     page_list = sorted(set(opts.pages)) if opts.pages is not None else (
         repos.translations.translated_pages(book.id, opts.lang, opts.provider, opts.model)
     )  # fmt: skip
@@ -113,22 +138,62 @@ def export_book(
     total, missing, missing_pages = count_untranslated(blocks, translations)
     toc = build_toc(toc_source, blocks, translations)
     sections = render_sections(book, blocks, translations, opts.mode, work_dir, doc, opts.lang, toc)
+    return PreparedExport(
+        book, opts, page_list, sections, toc, total, missing, missing_pages, work_dir
+    )
 
-    html_path = work_dir / f"export.{opts.mode}.{opts.lang}.html"
-    rows = _print(
-        book, sections, toc, opts, html_path, out_pdf, browser=browser, runner=runner,
-        timeout_s=timeout_s,
-    )  # fmt: skip
-    set_outline(out_pdf, rows, title=book.title)
+
+def print_export(
+    prepared: PreparedExport,
+    out_pdf: Path,
+    *,
+    browser: Path | None = None,
+    runner: PrintRunner = run_print,
+    timeout_s: float = DEFAULT_TIMEOUT_S,
+) -> ExportResult:
+    """Phase 2 (no document access): print to a temp file next to ``out_pdf``, add bookmarks,
+    then atomically replace ``out_pdf`` — a failed export never destroys an earlier file."""
+    opts, book = prepared.opts, prepared.book
+    out_pdf.parent.mkdir(parents=True, exist_ok=True)
+    tmp = out_pdf.with_name(f".{out_pdf.stem}.{uuid.uuid4().hex[:8]}.tmp.pdf")
+    html_path = prepared.work_dir / f"export.{opts.mode}.{opts.lang}.html"
+    try:
+        rows = _print(
+            book, prepared.sections, prepared.toc, opts, html_path, tmp, browser=browser,
+            runner=runner, timeout_s=timeout_s,
+        )  # fmt: skip
+        set_outline(tmp, rows, title=book.title)
+        os.replace(tmp, out_pdf)
+    finally:
+        tmp.unlink(missing_ok=True)
     return ExportResult(
         pdf=out_pdf,
         html=html_path,
-        pages=page_list,
-        total_blocks=total,
-        untranslated_blocks=missing,
-        untranslated_pages=missing_pages,
+        pages=prepared.pages,
+        total_blocks=prepared.total_blocks,
+        untranslated_blocks=prepared.untranslated_blocks,
+        untranslated_pages=prepared.untranslated_pages,
         bookmarks=len(rows),
     )
+
+
+def export_book(
+    book: Book,
+    doc: pymupdf.Document,
+    toc_source: Sequence[TocSource],
+    repos: Repos,
+    ensure_pages: EnsurePages,
+    opts: ExportOptions,
+    out_pdf: Path,
+    work_dir: Path,
+    *,
+    browser: Path | None = None,
+    runner: PrintRunner = run_print,
+    timeout_s: float = DEFAULT_TIMEOUT_S,
+) -> ExportResult:
+    check_output_path(out_pdf, book, repos)
+    prepared = prepare_export(book, doc, toc_source, repos, ensure_pages, opts, work_dir)
+    return print_export(prepared, out_pdf, browser=browser, runner=runner, timeout_s=timeout_s)
 
 
 def _print(

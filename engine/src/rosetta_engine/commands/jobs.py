@@ -19,7 +19,7 @@ from rich.table import Table
 
 from rosetta_engine import config
 from rosetta_engine.errors import ExtractionError, RosettaError
-from rosetta_engine.jobs.runner import JobError, JobRunner
+from rosetta_engine.jobs.runner import BUDGET_NO_PRICE, JobError, JobRunner
 from rosetta_engine.models import BookProfile, TranslationReport
 from rosetta_engine.store.db import connect, migrate
 from rosetta_engine.store.repo import JobRow, Repos
@@ -93,8 +93,12 @@ def _execute(
     *,
     yes: bool,
     only: list[int] | None = None,
+    continuing: bool = False,
 ) -> None:
-    """Plan the job's remaining pages, confirm, run, write HTML and exit with a status code."""
+    """Plan the job's remaining pages, confirm, run, write HTML and exit with a status code.
+
+    Nothing about the job changes before the user confirms (a declined retry keeps its failed
+    pages); ``continuing`` clears a stale pause request only after confirmation."""
     c = _cli()
     plan = runner.plan(job, s.doc, s.meta, s.book, profile=profile, only=only)
     c._print_plan(plan, s)
@@ -103,9 +107,14 @@ def _execute(
             f"Bütçe: ${job.budget_usd:.2f} (harcanan ≈ ${job.spent_usd:.3f}); "
             "aşılacaksa iş duraklar."
         )
+        if not plan.estimate.price_known:
+            c.err.print(f"[yellow]{BUDGET_NO_PRICE}[/]")
     report: TranslationReport
     if plan.batches:
         _confirm(yes)
+    if continuing:
+        job = runner.prepare_continue(job.id)
+    if plan.batches:
         with Progress(
             TextColumn("{task.description}"), BarColumn(), MofNCompleteColumn(),
             console=c.console, transient=True,
@@ -169,7 +178,9 @@ def start(
     ] = None,
     yes: YesOpt = False,
     lang: Annotated[str | None, typer.Option("--lang")] = None,
-    provider: Annotated[str | None, typer.Option("--provider")] = None,
+    provider: Annotated[
+        str | None, typer.Option("--provider", help="claude-cli | fake | deepl | ollama")
+    ] = None,
     model: Annotated[str | None, typer.Option("--model")] = None,
     profile: ProfileOpt = None,
 ) -> None:
@@ -188,6 +199,8 @@ def start(
             c._print_plan(plan, s)
             if budget is not None:
                 c.console.print(f"Bütçe: ${budget:.2f}; aşılacaksa iş duraklar.")
+                if not plan.estimate.price_known:
+                    c.err.print(f"[yellow]{BUDGET_NO_PRICE}[/]")
             if plan.batches:
                 _confirm(yes)
             job = runner.create(
@@ -228,10 +241,8 @@ def _continue(job_id: int, yes: bool, profile: Path | None, *, retry: bool) -> N
         with c._session(path, c.format_pages(only), job_row.provider, job_row.model) as s:
             book_profile = c._resolve_profile(book_profile, s)
             runner = JobRunner(s.service, s.repos)
-            if retry:
-                runner.reset_failed(job_id)
             fresh = runner.get(job_id)
-            _execute(s, runner, fresh, book_profile, yes=yes, only=only)
+            _execute(s, runner, fresh, book_profile, yes=yes, only=only, continuing=True)
     except (ExtractionError, JobError) as e:
         raise _fail(e) from e
 

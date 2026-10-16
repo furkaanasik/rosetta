@@ -33,6 +33,7 @@ type Method = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 type Query = Record<string, string | number | boolean | undefined>;
 
 const KNOWN_KINDS: ReadonlySet<string> = new Set<ApiErrorKind>([
+  "conflict",
   "usage_limit",
   "auth",
   "budget",
@@ -124,10 +125,17 @@ export class HttpEngineApi implements EngineApi {
       lang,
     });
   }
-  assetUrl(bookId: number, name: string): string {
-    return this.url(`/api/books/${bookId}/assets/${encodeURIComponent(name)}`, {
-      token: this.token,
-    });
+  async assetBlob(bookId: number, name: string): Promise<Blob> {
+    let res: Response;
+    try {
+      res = await this.fetchFn(this.url(`/api/books/${bookId}/assets/${encodeURIComponent(name)}`), {
+        headers: { Authorization: `Bearer ${this.token}` },
+      });
+    } catch (e) {
+      throw new EngineError("unavailable", `Motora ulaşılamıyor: ${String(e)}`);
+    }
+    if (!res.ok) throw new EngineError("not_found", `Görsel yüklenemedi: ${name}`);
+    return res.blob();
   }
 
   estimateTranslate(bookId: number, req: TranslateEstimateRequest) {

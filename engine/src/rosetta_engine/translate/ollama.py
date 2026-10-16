@@ -40,7 +40,18 @@ class OllamaTranslator:
         raw = model or self._s.ollama_model
         self.ollama_model = raw.removeprefix(MODEL_PREFIX)
         self.model = MODEL_PREFIX + self.ollama_model
-        self._client = client or httpx.Client(timeout=self._s.ollama_timeout_s)
+        self._client_or_none = client  # created lazily: read-only users never open sockets
+
+    @property
+    def _client(self) -> httpx.Client:
+        if self._client_or_none is None:
+            self._client_or_none = httpx.Client(timeout=self._s.ollama_timeout_s)
+        return self._client_or_none
+
+    def close(self) -> None:
+        if self._client_or_none is not None:
+            self._client_or_none.close()
+            self._client_or_none = None
 
     def translate(self, request: TranslationRequest, *, strict: bool = False) -> ProviderResult:
         body: dict[str, Any] = {
@@ -69,8 +80,13 @@ class OllamaTranslator:
             )
         if r.status_code >= 400:
             raise ProviderError(f"Ollama hatası {r.status_code}: {r.text[:200]}")
-        data = r.json()
-        content = (data.get("message") or {}).get("content", "")
+        try:
+            data = r.json()
+            content = (data.get("message") or {}).get("content", "")
+        except (ValueError, AttributeError) as e:
+            raise ProviderError(f"Ollama yanıtı bozuk: {r.text[:200]}") from e
+        if not isinstance(content, str):
+            raise ProviderError("Ollama yanıtı bozuk: içerik metin değil")
         log.debug("ollama response:\n%s", content)
         est_in, est_out = estimate_request(request)
         in_tok = int(data.get("prompt_eval_count") or est_in)

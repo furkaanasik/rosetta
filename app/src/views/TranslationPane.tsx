@@ -1,7 +1,7 @@
-import { forwardRef, useCallback, useEffect, useMemo, useState } from "react";
+import { forwardRef, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { EngineApi } from "../api/engine";
 import type { HtmlMode, PageHtml } from "../api/types";
-import { sanitizeEngineHtml } from "../lib/sanitize";
+import { isAssetName, sanitizeEngineHtml } from "../lib/sanitize";
 
 interface Props {
   api: EngineApi | null;
@@ -31,25 +31,65 @@ export const TranslationPane = forwardRef<HTMLDivElement, Props>(function Transl
   { api, bookId, page, mode, revision, onScroll, onWordClick, onBlockClick, highlight },
   ref,
 ) {
-  const [data, setData] = useState<PageHtml | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  // Content is tagged with the page it belongs to: after a page change (or an error) the old
+  // page's HTML is never shown under the new page number. A refresh of the same page keeps it
+  // on screen until the new version arrives.
+  const key = `${bookId ?? ""}:${page}:${mode}`;
+  const [loaded, setLoaded] = useState<{ key: string; data: PageHtml } | null>(null);
+  const [error, setError] = useState<{ key: string; message: string } | null>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!api || bookId === null) return;
     let cancelled = false;
     api
       .pageHtml(bookId, page, mode)
-      .then((d) => !cancelled && (setData(d), setError(null)))
-      .catch((e: unknown) => !cancelled && setError(e instanceof Error ? e.message : String(e)));
+      .then((d) => {
+        if (cancelled) return;
+        setLoaded({ key, data: d });
+        setError(null);
+      })
+      .catch((e: unknown) => {
+        if (cancelled) return;
+        setLoaded(null);
+        setError({ key, message: e instanceof Error ? e.message : String(e) });
+      });
     return () => {
       cancelled = true;
     };
-  }, [api, bookId, page, mode, revision]);
+  }, [api, bookId, page, mode, revision, key]);
 
-  const html = useMemo(() => {
-    if (!data || !api || bookId === null) return "";
-    return sanitizeEngineHtml(data.html, (name) => api.assetUrl(bookId, name));
-  }, [data, api, bookId]);
+  const data = loaded?.key === key ? loaded.data : null;
+  const errorText = error?.key === key ? error.message : null;
+
+  const html = useMemo(() => (data ? sanitizeEngineHtml(data.html) : ""), [data]);
+
+  // Figure/table crops: fetched with the bearer header and shown through blob URLs.
+  useEffect(() => {
+    const root = contentRef.current;
+    if (!api || bookId === null || !root || !html) return;
+    let cancelled = false;
+    const urls: string[] = [];
+    for (const img of Array.from(root.querySelectorAll<HTMLImageElement>("img[data-asset]"))) {
+      const name = img.dataset.asset ?? "";
+      if (!isAssetName(name)) continue;
+      api
+        .assetBlob(bookId, name)
+        .then((blob) => {
+          if (cancelled) return;
+          const url = URL.createObjectURL(blob);
+          urls.push(url);
+          img.src = url;
+        })
+        .catch(() => {
+          if (!cancelled) img.alt = img.alt || "Görsel yüklenemedi";
+        });
+    }
+    return () => {
+      cancelled = true;
+      for (const u of urls) URL.revokeObjectURL(u);
+    };
+  }, [api, bookId, html]);
 
   const handleClick = useCallback(
     (e: React.MouseEvent<HTMLDivElement>) => {
@@ -95,11 +135,12 @@ export const TranslationPane = forwardRef<HTMLDivElement, Props>(function Transl
     >
       {highlightCss && <style>{`${highlightCss}{background:var(--hl);border-radius:3px}`}</style>}
       {bookId === null && <p className="empty">Bir PDF açın.</p>}
-      {error && <p className="error">{error}</p>}
+      {errorText && <p className="error">{errorText}</p>}
       {data && mode === "tr" && data.translated_blocks === 0 && data.translatable_blocks > 0 && (
         <p className="banner">Bu sayfa henüz çevrilmedi — "Bu Sayfayı Çevir" ile çevirebilirsiniz.</p>
       )}
       <div
+        ref={contentRef}
         className="engine-html"
         onClick={handleClick}
         onMouseUp={handleMouseUp}

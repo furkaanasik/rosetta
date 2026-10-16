@@ -101,6 +101,7 @@ def estimate(
     total_blocks: int = 0,
     cached_blocks: int = 0,
     supports_profile: bool = True,
+    warnings: list[str] | None = None,
 ) -> dict[str, Any]:
     return {
         "confirm_token": token,
@@ -119,6 +120,7 @@ def estimate(
         "pages": [p + 1 for p in pages],
         "supports_profile": supports_profile,
         "expires_in": expires_in,
+        "warnings": list(warnings or []),
     }
 
 

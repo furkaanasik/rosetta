@@ -464,6 +464,14 @@ select {
 .status-msg {
   color: var(--accent);
 }
+.status-error {
+  color: var(--danger, #b42318);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 40ch;
+}
 .dot {
   width: 8px;
   height: 8px;

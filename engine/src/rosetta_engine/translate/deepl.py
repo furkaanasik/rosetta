@@ -52,11 +52,17 @@ def protect(text: str) -> tuple[str, list[str]]:
 
 
 def restore(text: str, codes: list[str]) -> str:
-    def put(m: re.Match[str]) -> str:
+    """Unescape DeepL's XML text, then put the original inline code back verbatim (code is
+    never unescaped: `` `&lt;` `` must stay ``&lt;``)."""
+    out: list[str] = []
+    last = 0
+    for m in _PLACEHOLDER.finditer(text):
+        out.append(unescape(text[last : m.start()]))
         i = int(m.group(1))
-        return codes[i] if i < len(codes) else ""
-
-    return unescape(_PLACEHOLDER.sub(put, text))
+        out.append(codes[i] if i < len(codes) else "")
+        last = m.end()
+    out.append(unescape(text[last:]))
+    return "".join(out)
 
 
 class DeepLTranslator:
@@ -72,8 +78,24 @@ class DeepLTranslator:
     ) -> None:
         self.model = "deepl"
         self._s = settings or load_settings()
-        self._client = client or httpx.Client(timeout=self._s.deepl_timeout_s)
+        self._client_or_none = client  # created lazily: read-only users never open sockets
         self._sleep = sleep
+
+    @property
+    def _client(self) -> httpx.Client:
+        if self._client_or_none is None:
+            self._client_or_none = httpx.Client(timeout=self._s.deepl_timeout_s)
+        return self._client_or_none
+
+    def close(self) -> None:
+        if self._client_or_none is not None:
+            self._client_or_none.close()
+            self._client_or_none = None
+
+    def _usage(self, in_chars: int, out_chars: int) -> tuple[int, int, float]:
+        in_tok, out_tok = estimate_tokens("x" * in_chars), estimate_tokens("x" * out_chars)
+        price = self._s.price_for("deepl")
+        return in_tok, out_tok, usd(in_tok, 0, price) if price is not None else 0.0
 
     def _key(self) -> str:
         key = os.environ.get(self._s.deepl_auth_key_env, "").strip()
@@ -94,23 +116,30 @@ class DeepLTranslator:
                 flat.append((item.id, protected, codes))
 
         out_texts: list[str] = []
+        billed_chars = 0  # characters of chunks DeepL already translated (and billed)
         for i in range(0, len(flat), MAX_TEXTS_PER_CALL):
             chunk = [t for _, t, _ in flat[i : i + MAX_TEXTS_PER_CALL]]
-            out_texts.extend(self._post(base, key, chunk, request.lang))
+            try:
+                out_texts.extend(self._post(base, key, chunk, request.lang))
+            except ProviderError as e:
+                if billed_chars:  # earlier chunks were paid for: report them with the error
+                    e.input_tokens, e.output_tokens, e.cost_usd = self._usage(
+                        billed_chars, sum(len(t) for t in out_texts)
+                    )
+                raise
+            billed_chars += sum(len(t) for t in chunk)
 
         items: dict[int, list[str]] = {item.id: [] for item in request.items}
         for (item_id, _, codes), text in zip(flat, out_texts, strict=True):
             items[item_id].append(restore(text, codes))
 
         chars = sum(len(s) for item in request.items for s in item.sentences)
-        out_chars = sum(len(t) for t in out_texts)
-        in_tok, out_tok = estimate_tokens("x" * chars), estimate_tokens("x" * out_chars)
-        price = self._s.price_for("deepl")
+        in_tok, out_tok, cost = self._usage(chars, sum(len(t) for t in out_texts))
         return ProviderResult(
             items={i: ParsedItem(id=i, sentences=s, aligned=True) for i, s in items.items()},
             input_tokens=in_tok,
             output_tokens=out_tok,
-            cost_usd=usd(in_tok, 0, price) if price is not None else 0.0,
+            cost_usd=cost,
         )
 
     def _post(self, base: str, key: str, texts: list[str], lang: str) -> list[str]:
@@ -131,8 +160,7 @@ class DeepLTranslator:
                 self._sleep(2.0**attempt)
                 continue
             self._check(r)
-            data = r.json()
-            texts_out = [t["text"] for t in data.get("translations", [])]
+            texts_out = _texts(r)
             if len(texts_out) != len(texts):
                 raise ProviderError(
                     f"DeepL {len(texts)} metin yerine {len(texts_out)} çeviri döndürdü"
@@ -152,3 +180,15 @@ class DeepLTranslator:
         if r.status_code == 429:
             raise UsageLimitError("DeepL istek sınırı (429) — sonra tekrar dene")
         raise ProviderError(f"DeepL hatası {r.status_code}: {detail}")
+
+
+def _texts(r: httpx.Response) -> list[str]:
+    """``translations[].text`` of a DeepL response; anything malformed is a ProviderError."""
+    try:
+        data = r.json()
+        texts = [t["text"] for t in data["translations"]]
+    except (ValueError, KeyError, TypeError) as e:
+        raise ProviderError(f"DeepL yanıtı bozuk: {r.text[:200]}") from e
+    if not all(isinstance(t, str) for t in texts):
+        raise ProviderError("DeepL yanıtı bozuk: metin olmayan çeviri")
+    return texts

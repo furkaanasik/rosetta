@@ -34,7 +34,10 @@ def register(app: typer.Typer) -> None:
         ] = ModeChoice.tr,
         lang: Annotated[str | None, typer.Option("--lang", help="Dil (varsayılan: config)")] = None,
         provider: Annotated[
-            str | None, typer.Option("--provider", help="Hangi sağlayıcının çevirisi")
+            str | None,
+            typer.Option(
+                "--provider", help="Hangi sağlayıcının çevirisi: claude-cli | fake | deepl | ollama"
+            ),
         ] = None,
         model: Annotated[str | None, typer.Option("--model", help="Hangi modelin çevirisi")] = None,
         out: Annotated[
@@ -56,13 +59,19 @@ def register(app: typer.Typer) -> None:
         from rosetta_engine.store.db import connect, migrate
         from rosetta_engine.store.repo import Repos
         from rosetta_engine.translate.fake import FakeTranslator
+        from rosetta_engine.translate.providers import UnknownProviderError, make_translator
         from rosetta_engine.translate.service import PageTranslationService
 
         try:
             settings = config.load_settings()
             target_lang = lang or settings.default_lang
-            opts_provider = provider or settings.provider
-            opts_model = model or settings.model
+            # Same (provider, model) cache key the translation was stored under, e.g.
+            # deepl → ("deepl", "deepl"), ollama → ("ollama", "ollama/<name>"). No AI call.
+            try:
+                keyed = make_translator(provider or settings.provider, model, settings)
+            except UnknownProviderError as e:
+                raise typer.BadParameter(str(e), param_hint="--provider") from e
+            opts_provider, opts_model = keyed.name, keyed.model
             conn = connect(config.db_path())
             try:
                 migrate(conn)

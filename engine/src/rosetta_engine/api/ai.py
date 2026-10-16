@@ -1,0 +1,442 @@
+"""AI endpoints. Every one is two-step: a free ``…/estimate`` issues a one-shot confirm token
+bound to the exact plan; the run endpoint only executes a plan presented with its token."""
+
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass
+from typing import Any
+
+from fastapi import APIRouter, Query
+
+from rosetta_engine.api.deps import Engine
+from rosetta_engine.api.errors import bad_request, not_found
+from rosetta_engine.api.schemas import (
+    ConfirmBody,
+    ExplainEstimateBody,
+    JobEstimateBody,
+    Operation,
+    TranslateEstimateBody,
+    estimate,
+    job,
+    report,
+)
+from rosetta_engine.api.state import EngineState, OpenBook, Session
+from rosetta_engine.explain.explainer import Explainer, ExplainPlan, Explanation, render_text
+from rosetta_engine.jobs.runner import FINISHED, JobError, JobRunner
+from rosetta_engine.models import BookProfile, TranslationPlan
+from rosetta_engine.profile.profiler import ProfilePlan, Profiler
+from rosetta_engine.store.repo import JobRow
+from rosetta_engine.translate.base import Translator
+from rosetta_engine.translate.providers import UnknownProviderError, supports_profile
+from rosetta_engine.translate.service import PageTranslationService
+
+log = logging.getLogger(__name__)
+router = APIRouter(prefix="/api")
+
+
+# --- translator setup (mirrors the CLI) ------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class _Provider:
+    name: str
+    model: str | None  # as requested (None = provider default)
+    thinking: str | None
+    extra: int
+
+
+def _provider(eng: EngineState, provider: str | None, model: str | None) -> _Provider:
+    name = provider or eng.settings.provider
+    if name == "claude-cli":
+        level = eng.settings.thinking_level
+        extra = eng.settings.thinking_extra_output(model or eng.settings.model)
+        return _Provider(name, model, level, extra)
+    return _Provider(name, model, None, 0)
+
+
+def _translator(eng: EngineState, p: _Provider) -> Translator:
+    try:
+        return eng.translator_factory(p.name, p.model, eng.settings)
+    except UnknownProviderError as e:
+        raise bad_request(str(e)) from e
+
+
+def _service(
+    eng: EngineState, s: Session, p: _Provider
+) -> tuple[PageTranslationService, Translator]:
+    t = _translator(eng, p)
+    svc = PageTranslationService(t, s.repos, eng.settings, thinking_output_per_call=p.extra)
+    return svc, t
+
+
+def _profile(s: Session, book_id: int, t: Translator) -> BookProfile | None:
+    return s.repos.profiles.get(book_id) if supports_profile(t) else None
+
+
+def _plan_estimate(
+    eng: EngineState,
+    token: str,
+    operation: str,
+    plan: TranslationPlan,
+    p: _Provider,
+    t: Translator,
+) -> dict[str, Any]:
+    op: Operation = "translate" if operation == "translate" else "job"
+    return estimate(
+        token,
+        op,
+        provider=t.name,
+        model=t.model,
+        cost=plan.estimate,
+        thinking=p.thinking,
+        thinking_extra=p.extra,
+        pages=plan.pages,
+        expires_in=eng.confirm.ttl_s,
+        total_blocks=plan.total_blocks,
+        cached_blocks=plan.cached_blocks,
+        supports_profile=supports_profile(t),
+    )
+
+
+# --- single translation -----------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class _TranslatePayload:
+    plan: TranslationPlan
+    provider: _Provider
+    profile: BookProfile | None
+
+
+@router.post("/books/{book_id}/estimate")
+def translate_estimate(book_id: int, body: TranslateEstimateBody, eng: Engine) -> dict[str, Any]:
+    p = _provider(eng, body.provider, body.model)
+    with eng.db() as s:
+        ob = eng.book(s, book_id)
+        pages = eng.check_pages(ob, body.pages)
+        svc, t = _service(eng, s, p)
+        profile = _profile(s, book_id, t)
+        lang = body.lang or eng.settings.default_lang
+        with ob.lock:
+            plan = svc.plan(
+                ob.book, ob.doc, ob.meta, pages, lang, profile=profile, force=body.force
+            )
+    token = eng.confirm.issue("translate", f"book:{book_id}", _TranslatePayload(plan, p, profile))
+    return _plan_estimate(eng, token, "translate", plan, p, t)
+
+
+@router.post("/books/{book_id}/translate")
+def translate(book_id: int, body: ConfirmBody, eng: Engine) -> dict[str, Any]:
+    scope = f"book:{book_id}"
+    payload: _TranslatePayload = eng.confirm.take(body.confirm_token, "translate", scope)
+    with eng.db() as s:
+        svc, _ = _service(eng, s, payload.provider)
+        result = svc.execute(payload.plan, profile=payload.profile)
+    return report(result)
+
+
+# --- batch jobs ------------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class _JobPayload:
+    book_id: int
+    pages: list[int]
+    lang: str
+    provider: _Provider
+    budget_usd: float | None
+
+
+def _format_pages(pages: list[int]) -> str:
+    from rosetta_engine.cli import format_pages
+
+    return format_pages(pages)
+
+
+def _job_model(job_provider: str, job_model: str) -> str | None:
+    if job_provider == "ollama":
+        return job_model.removeprefix("ollama/")
+    if job_provider == "deepl":
+        return None
+    return job_model
+
+
+def _run_job(eng: EngineState, job_id: int, p: _Provider, reset_failed: bool = False) -> None:
+    """Background thread body: own SQLite connection; plan under the book lock, then run."""
+    try:
+        with eng.db() as s:
+            svc, t = _service(eng, s, p)
+            runner = JobRunner(svc, s.repos)
+            current = runner.get(job_id)
+            ob = eng.book(s, current.book_id)
+            profile = _profile(s, current.book_id, t)
+            try:
+                with ob.lock:
+                    plan = runner.plan(current, ob.doc, ob.meta, ob.book, profile=profile)
+            except Exception as e:
+                s.repos.jobs.set_status(job_id, "paused", f"planlama hatası: {e}")
+                raise
+            runner.run(current, plan, profile=profile)
+    except Exception:
+        log.exception("job %d failed", job_id)
+
+
+def _job_or_404(s: Session, job_id: int) -> JobRow:
+    found = s.repos.jobs.get(job_id)
+    if found is None:
+        raise not_found(f"İş bulunamadı: #{job_id}")
+    return found
+
+
+def _job_provider(eng: EngineState, provider: str, model: str) -> _Provider:
+    return _provider(eng, provider, _job_model(provider, model))
+
+
+@router.post("/books/{book_id}/jobs/estimate")
+def job_estimate(book_id: int, body: JobEstimateBody, eng: Engine) -> dict[str, Any]:
+    p = _provider(eng, body.provider, body.model)
+    with eng.db() as s:
+        ob = eng.book(s, book_id)
+        pages = list(range(ob.book.page_count)) if body.all else eng.check_pages(ob, body.pages)
+        svc, t = _service(eng, s, p)
+        lang = body.lang or eng.settings.default_lang
+        with ob.lock:
+            plan = svc.plan(ob.book, ob.doc, ob.meta, pages, lang, profile=_profile(s, book_id, t))
+    payload = _JobPayload(book_id, pages, lang, p, body.budget_usd)
+    token = eng.confirm.issue("job", "new", payload)
+    return _plan_estimate(eng, token, "job", plan, p, t)
+
+
+@router.post("/jobs")
+def job_start(body: ConfirmBody, eng: Engine) -> dict[str, Any]:
+    payload: _JobPayload = eng.confirm.take(body.confirm_token, "job", "new")
+    with eng.db() as s:
+        ob = eng.book(s, payload.book_id)
+        t = _translator(eng, payload.provider)
+        created = JobRunner(None, s.repos).create(
+            ob.book,
+            payload.pages,
+            _format_pages(payload.pages),
+            payload.lang,
+            t.name,
+            t.model,
+            payload.budget_usd,
+        )
+    eng.start_job_thread(created.id, lambda: _run_job(eng, created.id, payload.provider))
+    with eng.db() as s:
+        return job(_job_or_404(s, created.id))
+
+
+@router.get("/jobs")
+def job_list(eng: Engine, book_id: int | None = Query(default=None)) -> list[dict[str, Any]]:
+    with eng.db() as s:
+        return [job(j) for j in s.repos.jobs.list_jobs(book_id)]
+
+
+@router.get("/jobs/{job_id}")
+def job_get(job_id: int, eng: Engine) -> dict[str, Any]:
+    with eng.db() as s:
+        return job(_job_or_404(s, job_id))
+
+
+@router.post("/jobs/{job_id}/pause")
+def job_pause(job_id: int, eng: Engine) -> dict[str, Any]:
+    with eng.db() as s:
+        _job_or_404(s, job_id)
+        try:
+            return job(JobRunner(None, s.repos).request_pause(job_id))
+        except JobError as e:
+            raise bad_request(str(e)) from e
+
+
+@router.post("/jobs/{job_id}/cancel")
+def job_cancel(job_id: int, eng: Engine) -> dict[str, Any]:
+    with eng.db() as s:
+        _job_or_404(s, job_id)
+        try:
+            return job(JobRunner(None, s.repos).cancel(job_id))
+        except JobError as e:
+            raise bad_request(str(e)) from e
+
+
+def _resumable(eng: EngineState, job_id: int) -> None:
+    thread = eng.job_thread(job_id)
+    if thread is not None and thread.is_alive():
+        raise bad_request(f"İş #{job_id} zaten çalışıyor")
+
+
+def _job_plan_estimate(
+    eng: EngineState, job_id: int, operation: str, *, failed_only: bool
+) -> dict[str, Any]:
+    _resumable(eng, job_id)
+    with eng.db() as s:
+        current = _job_or_404(s, job_id)
+        if current.status in FINISHED and current.status != "failed":
+            raise bad_request(f"İş #{job_id} zaten bitti ({current.status})")
+        only = sorted(current.failed) if failed_only else current.remaining
+        if not only:
+            what = "hatalı sayfa" if failed_only else "kalan sayfa"
+            raise bad_request(f"İş #{job_id}: {what} yok")
+        p = _job_provider(eng, current.provider, current.model)
+        svc, t = _service(eng, s, p)
+        ob = eng.book(s, current.book_id)
+        with ob.lock:
+            plan = JobRunner(svc, s.repos).plan(
+                current, ob.doc, ob.meta, ob.book, profile=_profile(s, ob.book.id, t), only=only
+            )
+    token = eng.confirm.issue(operation, f"job:{job_id}", p)
+    return _plan_estimate(eng, token, operation, plan, p, t)
+
+
+@router.post("/jobs/{job_id}/resume/estimate")
+def job_resume_estimate(job_id: int, eng: Engine) -> dict[str, Any]:
+    return _job_plan_estimate(eng, job_id, "resume", failed_only=False)
+
+
+@router.post("/jobs/{job_id}/resume")
+def job_resume(job_id: int, body: ConfirmBody, eng: Engine) -> dict[str, Any]:
+    p: _Provider = eng.confirm.take(body.confirm_token, "resume", f"job:{job_id}")
+    _resumable(eng, job_id)
+    with eng.db() as s:
+        _job_or_404(s, job_id)
+    eng.start_job_thread(job_id, lambda: _run_job(eng, job_id, p))
+    with eng.db() as s:
+        return job(_job_or_404(s, job_id))
+
+
+@router.post("/jobs/{job_id}/retry-failed/estimate")
+def job_retry_estimate(job_id: int, eng: Engine) -> dict[str, Any]:
+    return _job_plan_estimate(eng, job_id, "retry", failed_only=True)
+
+
+@router.post("/jobs/{job_id}/retry-failed")
+def job_retry(job_id: int, body: ConfirmBody, eng: Engine) -> dict[str, Any]:
+    p: _Provider = eng.confirm.take(body.confirm_token, "retry", f"job:{job_id}")
+    _resumable(eng, job_id)
+    with eng.db() as s:
+        _job_or_404(s, job_id)
+        try:
+            JobRunner(None, s.repos).reset_failed(job_id)
+        except JobError as e:
+            raise bad_request(str(e)) from e
+    eng.start_job_thread(job_id, lambda: _run_job(eng, job_id, p))
+    with eng.db() as s:
+        return job(_job_or_404(s, job_id))
+
+
+# --- book profile ------------------------------------------------------------------------------
+
+
+def _profile_json(profile: BookProfile) -> dict[str, Any]:
+    return profile.model_dump(by_alias=True)
+
+
+@router.get("/books/{book_id}/profile")
+def profile_get(book_id: int, eng: Engine) -> dict[str, Any] | None:
+    with eng.db() as s:
+        if s.repos.books.get(book_id) is None:
+            raise not_found(f"Kitap bulunamadı: #{book_id}")
+        stored = s.repos.profiles.get(book_id)
+        return _profile_json(stored) if stored is not None else None
+
+
+@router.put("/books/{book_id}/profile")
+def profile_put(book_id: int, body: dict[str, Any], eng: Engine) -> dict[str, Any]:
+    try:
+        profile = BookProfile.model_validate(body)
+    except ValueError as e:
+        raise bad_request(f"Geçersiz profil: {e}") from e
+    with eng.db() as s:
+        if s.repos.books.get(book_id) is None:
+            raise not_found(f"Kitap bulunamadı: #{book_id}")
+        s.repos.profiles.put(book_id, profile)  # never touches the translation cache
+        stored = s.repos.profiles.get(book_id)
+        assert stored is not None
+        return _profile_json(stored)
+
+
+def _profiler(eng: EngineState, s: Session) -> Profiler:
+    return Profiler(s.repos, eng.settings, complete_fn=eng.complete_fn)
+
+
+@router.post("/books/{book_id}/profile/analyze/estimate")
+def profile_estimate(book_id: int, eng: Engine) -> dict[str, Any]:
+    with eng.db() as s:
+        ob: OpenBook = eng.book(s, book_id)
+        plan = _profiler(eng, s).plan(
+            ob.book, ob.meta, lambda pages: eng.pages(s, ob, list(pages)), eng.settings.default_lang
+        )
+    token = eng.confirm.issue("profile", f"book:{book_id}", plan)
+    return estimate(
+        token,
+        "profile",
+        provider="claude-cli",
+        model=plan.model,
+        cost=plan.estimate,
+        thinking=eng.settings.thinking_level,
+        thinking_extra=eng.settings.thinking_extra_output(plan.model),
+        pages=plan.pages,
+        expires_in=eng.confirm.ttl_s,
+    )
+
+
+@router.post("/books/{book_id}/profile/analyze")
+def profile_analyze(book_id: int, body: ConfirmBody, eng: Engine) -> dict[str, Any]:
+    plan: ProfilePlan = eng.confirm.take(body.confirm_token, "profile", f"book:{book_id}")
+    with eng.db() as s:
+        return _profile_json(_profiler(eng, s).run(plan))
+
+
+# --- "Bunu açıkla" ------------------------------------------------------------------------------
+
+
+def _explanation(e: Explanation) -> dict[str, Any]:
+    return {"text": e.text, "explanation": render_text(e), "model": e.model, "cached": e.cached}
+
+
+def _explainer(eng: EngineState, s: Session) -> Explainer:
+    return Explainer(s.conn, eng.settings, complete_fn=eng.complete_fn)
+
+
+def _context(eng: EngineState, s: Session, body: ExplainEstimateBody) -> str | None:
+    if body.book_id is None or body.page is None:
+        return None
+    ob = eng.book(s, body.book_id)
+    (p,) = eng.check_pages(ob, [body.page])
+    needle = " ".join(body.text.split()).casefold()
+    for b in eng.pages(s, ob, [p])[p].blocks:
+        if b.translatable and needle and needle in " ".join(b.text.split()).casefold():
+            return b.text
+    return None
+
+
+@router.post("/explain/estimate")
+def explain_estimate(body: ExplainEstimateBody, eng: Engine) -> dict[str, Any]:
+    with eng.db() as s:
+        try:
+            plan = _explainer(eng, s).plan(body.text, _context(eng, s, body), body.book_id)
+        except ValueError as e:
+            raise bad_request(str(e)) from e
+    if plan.cached is not None:
+        return _explanation(plan.cached)
+    assert plan.estimate is not None
+    token = eng.confirm.issue("explain", "explain", plan)
+    return estimate(
+        token,
+        "explain",
+        provider="claude-cli",
+        model=plan.model,
+        cost=plan.estimate,
+        thinking=eng.settings.thinking_level,
+        thinking_extra=eng.settings.thinking_extra_output(plan.model),
+        pages=[body.page - 1] if body.page else [],
+        expires_in=eng.confirm.ttl_s,
+    )
+
+
+@router.post("/explain")
+def explain(body: ConfirmBody, eng: Engine) -> dict[str, Any]:
+    plan: ExplainPlan = eng.confirm.take(body.confirm_token, "explain", "explain")
+    with eng.db() as s:
+        return _explanation(_explainer(eng, s).run(plan))

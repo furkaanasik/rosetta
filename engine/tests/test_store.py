@@ -74,8 +74,10 @@ def _block(order: int, t: BlockType, text: str, **kw: object) -> Block:
 
 
 def test_migration_is_idempotent(conn: sqlite3.Connection) -> None:
-    assert db.migrate(conn) == 2
-    assert db.current_version(conn) == 2
+    latest = max(number for number, _ in db._migrations())
+    assert latest >= 3
+    assert db.migrate(conn) == latest
+    assert db.current_version(conn) == latest
     tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     assert {"books", "pages", "blocks", "translations", "page_status", "usage"} <= tables
 

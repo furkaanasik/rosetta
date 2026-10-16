@@ -28,12 +28,20 @@ class Price(BaseModel):
 def _default_pricing() -> dict[str, Price]:
     # List prices from the claude-api skill model table (cached 2026-09-25):
     # Claude Sonnet 5.5 $2.00 / $10.00, Claude Haiku 4.5 $1.00 / $5.00 per million tokens.
-    return {"sonnet": Price(input=2.0, output=10.0), "haiku": Price(input=1.0, output=5.0)}
+    # DeepL bills characters ($25 / 1M chars on Pro); expressed per estimated input token
+    # (≈3.6 chars/token → ≈$90 / 1M tokens). Free keys: set [pricing.deepl] in = 0.
+    # Ollama runs locally: free.
+    return {
+        "sonnet": Price(input=2.0, output=10.0),
+        "haiku": Price(input=1.0, output=5.0),
+        "deepl": Price(input=90.0, output=0.0),
+        "ollama": Price(input=0.0, output=0.0),
+    }
 
 
 def _model_family(model: str) -> str:
     """Map an alias or full model id ("claude-sonnet-5-5") to its family key ("sonnet")."""
-    for family in ("sonnet", "haiku", "opus", "fable"):
+    for family in ("deepl", "ollama", "sonnet", "haiku", "opus", "fable"):
         if family in model.lower():
             return family
     return model
@@ -54,6 +62,7 @@ class Settings(BaseModel):
     default_lang: str = "tr"
     provider: str = "claude-cli"
     model: str = "sonnet"
+    explain_model: str = "haiku"  # "Bunu açıkla" (Faz 7); requirements §3.6 ask for Haiku
     batch_max_pages: int = 5
     batch_max_input_tokens: int = 6000
     claude_timeout_s: int = 240
@@ -67,6 +76,12 @@ class Settings(BaseModel):
     )
     pricing: dict[str, Price] = Field(default_factory=_default_pricing)
     prefetch: bool = False
+    # Optional providers (Faz 8)
+    deepl_auth_key_env: str = "DEEPL_AUTH_KEY"  # env var holding the DeepL key (never in config)
+    deepl_timeout_s: int = 60
+    ollama_url: str = "http://localhost:11434"
+    ollama_model: str = "qwen2.5:7b"
+    ollama_timeout_s: int = 600
 
     @property
     def thinking_level(self) -> str | None:

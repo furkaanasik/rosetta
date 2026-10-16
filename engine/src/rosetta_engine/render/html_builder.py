@@ -1,14 +1,15 @@
-"""Blocks + translations -> local HTML pages (translation, EN|TR review, extractor debug).
+"""Blocks + translations -> local HTML pages (translation, EN|TR review, learn, debug).
 
 LLM output is untrusted: every text goes through :func:`inline` (or :func:`code_markup` for code
-blocks), which escapes first and only then adds our own ``<code>``/``<span>`` tags. Templates
-use autoescape; no other ``Markup`` is built from book or model text.
+blocks, :func:`learn_markup` in learn mode), which escapes first and only then adds our own
+``<code>``/``<span>``/``<ruby>`` tags. Templates use autoescape; no other ``Markup`` is built
+from book or model text.
 """
 
 from __future__ import annotations
 
 import re
-from collections.abc import Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from importlib.resources import files
 from pathlib import Path
@@ -20,8 +21,8 @@ from markupsafe import Markup, escape
 
 from rosetta_engine.models import Block, BlockType, Book, PageBlocks, Translation
 
-Mode = Literal["tr", "review", "debug"]
-_MODES: tuple[Mode, ...] = ("tr", "review", "debug")
+Mode = Literal["tr", "review", "learn", "debug"]
+_MODES: tuple[Mode, ...] = ("tr", "review", "learn", "debug")
 
 ASSETS_DIR = "assets"
 STYLE_FILE = "style.css"
@@ -31,6 +32,7 @@ _BACKTICK = re.compile(r"``(.+?)``|`([^`]+)`")
 _NUMERIC_MARKER = re.compile(r"^\(?(\d{1,3})[.)]?$")
 _CALLOUT_MARKER = re.compile(r"^\d{1,2}$")  # bare digit: vector-drawn ❶-style marker
 _CALLOUT_CHARS = re.compile("[\u2776-\u277f]")  # ❶ … ❿
+_WORD = re.compile(r"[A-Za-z][A-Za-z'’]*(?:-[A-Za-z]+)*")
 _CALLOUT_FIRST = 0x2776
 _CALLOUT_MAX = 10
 _FIGURE_TYPES = frozenset({BlockType.IMAGE, BlockType.TABLE, BlockType.CODE})
@@ -54,6 +56,56 @@ def inline(text: str) -> Markup:
         parts.append(Markup("<code>") + escape(code) + Markup("</code>"))
         pos = m.end()
     parts.append(escape(text[pos:]))
+    return Markup("").join(parts)
+
+
+@dataclass(frozen=True)
+class LearnOptions:
+    """Learn mode: ``unknown`` maps lemma → short Turkish meaning (book-wide)."""
+
+    unknown: Mapping[str, str]
+    lemma_of: Callable[[str], str]
+
+
+def _plain_learn(text: str, opts: LearnOptions, cache: dict[str, str]) -> Markup:
+    parts: list[Markup] = []
+    pos = 0
+    for m in _WORD.finditer(text):
+        parts.append(escape(text[pos : m.start()]))
+        word = m.group()
+        key = word.lower()
+        lemma = cache.get(key)
+        if lemma is None:
+            lemma = cache[key] = opts.lemma_of(key)
+        attrs = (
+            Markup(' data-w="') + escape(key) + Markup('" data-l="') + escape(lemma) + Markup('"')
+        )
+        if lemma in opts.unknown:
+            meaning = opts.unknown[lemma]
+            rt = Markup("<rt>") + escape(meaning) + Markup("</rt>") if meaning else Markup("")
+            parts.append(
+                Markup('<ruby class="w unknown"') + attrs + Markup(">") + escape(word) + rt
+                + Markup("</ruby>")
+            )  # fmt: skip
+        else:
+            tag = Markup('<span class="w"') + attrs + Markup(">")
+            parts.append(tag + escape(word) + Markup("</span>"))
+        pos = m.end()
+    parts.append(escape(text[pos:]))
+    return Markup("").join(parts)
+
+
+def learn_markup(text: str, opts: LearnOptions, cache: dict[str, str] | None = None) -> Markup:
+    """Like :func:`inline`, but every word is clickable and unknown lemmas get a ``<ruby>``."""
+    cache = {} if cache is None else cache
+    parts: list[Markup] = []
+    pos = 0
+    for m in _BACKTICK.finditer(text):
+        parts.append(_plain_learn(text[pos : m.start()], opts, cache))
+        code = m.group(1).strip() if m.group(1) is not None else m.group(2)
+        parts.append(Markup("<code>") + escape(code) + Markup("</code>"))
+        pos = m.end()
+    parts.append(_plain_learn(text[pos:], opts, cache))
     return Markup("").join(parts)
 
 
@@ -142,9 +194,12 @@ class FigureView:
 Node = BlockView | ListView | FigureView
 
 
-def _spans(sentences: Sequence[str], fallback: str) -> list[Markup]:
+Formatter = Callable[[str], Markup]
+
+
+def _spans(sentences: Sequence[str], fallback: str, fmt: Formatter = inline) -> list[Markup]:
     items = [s for s in sentences if s] or ([fallback] if fallback else [])
-    return [inline(s) for s in items]
+    return [fmt(s) for s in items]
 
 
 def _style(block: Block) -> str:
@@ -197,6 +252,8 @@ def _view(
     translations: dict[str, Translation],
     out_dir: Path,
     doc: pymupdf.Document | None,
+    fmt: Formatter = inline,
+    with_tr: bool = True,
 ) -> BlockView:
     classes = [f"b-{block.type.value}", f"ff-{block.family}"]
     if block.aside:
@@ -206,9 +263,9 @@ def _view(
     if block.italic:
         classes.append("italic")
 
-    en = TextView(_spans(block.sentences, block.text))
+    en = TextView(_spans(block.sentences, block.text, fmt))
     tr: TextView | None = None
-    if block.translatable:
+    if block.translatable and with_tr:
         t = translations.get(block.text_hash)
         if t is None:
             classes.append("untranslated")
@@ -315,8 +372,13 @@ def build_page_html(
     out_dir: Path,
     doc: pymupdf.Document | None = None,
     lang: str = "tr",
+    learn: LearnOptions | None = None,
 ) -> str:
-    """Render one page. ``translations`` is keyed by source ``text_hash``."""
+    """Render one page. ``translations`` is keyed by source ``text_hash``.
+
+    ``learn`` mode shows the original English text; words are clickable (``data-w``/``data-l``)
+    and lemmas in ``learn.unknown`` carry their Turkish meaning in ``<ruby>``.
+    """
     ordered = sorted(page.blocks, key=lambda b: b.order)
     if mode == "debug":
         views = [_view(b, translations, out_dir, doc) for b in ordered]
@@ -324,9 +386,20 @@ def build_page_html(
             book=book, page=page, views=views, lang="en", page_label=page.page_no + 1
         )
 
+    fmt: Formatter = inline
+    with_tr = True
+    if mode == "learn":
+        opts = learn or LearnOptions(unknown={}, lemma_of=str.lower)
+        cache: dict[str, str] = {}
+        fmt = lambda text: learn_markup(text, opts, cache)  # noqa: E731
+        with_tr = False
+
+    def view(b: Block) -> BlockView:
+        return _view(b, translations, out_dir, doc, fmt, with_tr)
+
     body = [b for b in ordered if b.type is not BlockType.FURNITURE]
-    main = [_view(b, translations, out_dir, doc) for b in body if b.type is not BlockType.FOOTNOTE]
-    notes = [_view(b, translations, out_dir, doc) for b in body if b.type is BlockType.FOOTNOTE]
+    main = [view(b) for b in body if b.type is not BlockType.FOOTNOTE]
+    notes = [view(b) for b in body if b.type is BlockType.FOOTNOTE]
     template = "review.html.j2" if mode == "review" else "page.html.j2"
     return _env.get_template(template).render(
         book=book,
@@ -334,7 +407,8 @@ def build_page_html(
         nodes=_group(main),
         rows=main,
         footnotes=notes,
-        lang=lang,
+        lang="en" if mode == "learn" else lang,
+        mode=mode,
         page_label=page.page_no + 1,
     )
 
@@ -354,10 +428,11 @@ def write_page(
     out_dir: Path,
     doc: pymupdf.Document | None = None,
     lang: str = "tr",
+    learn: LearnOptions | None = None,
 ) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)
     _copy_style(out_dir)
-    html = build_page_html(book, page, translations, mode, out_dir, doc, lang)
+    html = build_page_html(book, page, translations, mode, out_dir, doc, lang, learn)
     target = out_dir / page_filename(page.page_no, mode)
     target.write_text(html, encoding="utf-8")
     return target

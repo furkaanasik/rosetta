@@ -1,0 +1,56 @@
+/* Print layout for exported books. Font sizes stay at the original pt (Kural 4: no shrinking). */
+@page {
+  margin: 18mm 16mm 20mm;
+  @bottom-center { content: counter(page); font: 9pt "Noto Sans", sans-serif; color: #555; }
+}
+:root {
+  --scale: 1;
+  --bg: #ffffff; --fg: #111111; --muted: #555555; --rule: #d6d3cc;
+  --code-bg: #f3f1ec; --accent: #9a3f1c; --hl: transparent;
+}
+html, body { background: #fff; color: #111; }
+body.export { margin: 0; line-height: 1.45; }
+main.page, main.review { max-width: none; margin: 0; padding: 0; }
+
+/* Table of contents */
+nav.toc { break-after: page; }
+.toc-title { margin-top: 0; }
+.toc-list { list-style: none; padding: 0; margin: 0; font-family: var(--sans); font-size: 10.5pt; }
+.toc-list li { margin: .15em 0; break-inside: avoid; }
+.toc-list a { display: flex; gap: .6em; color: inherit; text-decoration: none; }
+.toc-list .t { flex: 1; }
+.toc-list .n { min-width: 3em; text-align: right; font-variant-numeric: tabular-nums; }
+.toc-list .lv1 { font-weight: 600; margin-top: .6em; }
+.toc-list .lv2 { padding-left: 1.2em; }
+.toc-list .lv3 { padding-left: 2.4em; }
+.toc-list .lv4, .toc-list .lv5, .toc-list .lv6 { padding-left: 3.6em; }
+
+/* Source page boundaries are labels only: the text flows (reflow), no forced breaks. */
+.src-label { font: 7.5pt var(--sans); color: var(--muted); text-align: right; margin: .4em 0 .1em; }
+.anchor { display: block; height: 0; }
+
+/* Page-break hygiene */
+h1, h2, h3, h4, h5, h6 { break-after: avoid; page-break-after: avoid; }
+h1 { break-before: page; }
+nav.toc h1, .src-page:first-of-type h1:first-of-type { break-before: auto; }
+pre, figure, img, table, .fig, .row.full, li { break-inside: avoid; }
+p { orphans: 2; widows: 2; }
+img { max-width: 100%; height: auto; }
+
+/* Code wraps instead of being clipped or shrunk */
+pre { white-space: pre-wrap; overflow: visible; word-break: break-word; border: 1px solid var(--rule); }
+
+/* Untranslated blocks (shown in the original language) are marked in the margin */
+.untranslated { border-left: 2px dashed #c9a227; padding-left: .5em; }
+
+/* Bilingual: EN | TR rows */
+.cols-head { display: grid; grid-template-columns: 1fr 1fr; gap: 1.2em; font: 600 9pt var(--sans);
+  color: var(--muted); border-bottom: 1px solid var(--rule); margin-bottom: .5em; }
+main.review .row.head { display: none; }
+main.review .row { display: grid; grid-template-columns: 1fr 1fr; gap: 1.2em; break-inside: avoid;
+  border-bottom: none; padding: .15em 0; }
+main.review .row.full { display: block; }
+main.review .row:has(h1) { break-before: page; }
+.src-page:first-of-type main.review .row:has(h1) { break-before: auto; }
+main.review h1 { break-before: auto; }
+.untranslated-note { color: var(--muted); }

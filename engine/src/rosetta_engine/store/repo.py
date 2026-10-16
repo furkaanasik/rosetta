@@ -100,6 +100,13 @@ class BookRepo(_Repo):
         assert book is not None
         return book
 
+    def get(self, book_id: int) -> Book | None:
+        row = self._c.execute(
+            "SELECT id, file_hash, title, page_count, file_path FROM books WHERE id = ?",
+            (book_id,),
+        ).fetchone()
+        return None if row is None else self._book(row)
+
     def get_by_hash(self, file_hash: str) -> Book | None:
         row = self._c.execute(
             "SELECT id, file_hash, title, page_count, file_path FROM books WHERE file_hash = ?",
@@ -107,6 +114,10 @@ class BookRepo(_Repo):
         ).fetchone()
         if row is None:
             return None
+        return self._book(row)
+
+    @staticmethod
+    def _book(row: sqlite3.Row) -> Book:
         return Book(
             id=row["id"],
             file_hash=row["file_hash"],
@@ -269,6 +280,15 @@ class TranslationRepo(_Repo):
             (book_id, page_no, lang, provider, model),
         ).fetchall()
         return {r["text_hash"]: _translation(r) for r in rows}
+
+    def translated_pages(self, book_id: int, lang: str, provider: str, model: str) -> list[int]:
+        """0-based pages with at least one cached translation for lang/provider/model."""
+        rows = self._c.execute(
+            "SELECT DISTINCT page_no FROM translations WHERE book_id = ? AND lang = ? "
+            "AND provider = ? AND model = ? ORDER BY page_no",
+            (book_id, lang, provider, model),
+        ).fetchall()
+        return [int(r["page_no"]) for r in rows]
 
     def put_rows(self, rows: Sequence[TranslationRow], *, overwrite: bool = False) -> None:
         """Cache translated blocks right away (paid work is never lost). No page status."""
@@ -435,6 +455,147 @@ class ProfileRepo(_Repo):
             )
 
 
+JobStatus = Literal["pending", "running", "paused", "done", "failed", "cancelled"]
+
+
+@dataclass(frozen=True)
+class JobRow:
+    id: int
+    book_id: int
+    type: str
+    lang: str
+    provider: str
+    model: str
+    page_spec: str
+    pages: list[int]  # 0-based
+    status: JobStatus
+    budget_usd: float | None
+    spent_usd: float
+    done_pages: list[int]
+    failed: dict[int, str]  # page_no -> reason
+    stop_reason: str | None
+    pause_requested: bool
+    created_at: str
+    updated_at: str
+
+    @property
+    def remaining(self) -> list[int]:
+        """Pages neither done nor failed."""
+        finished = set(self.done_pages) | set(self.failed)
+        return [p for p in self.pages if p not in finished]
+
+
+class JobRepo(_Repo):
+    def create(
+        self,
+        book_id: int,
+        lang: str,
+        provider: str,
+        model: str,
+        page_spec: str,
+        pages: Sequence[int],
+        budget_usd: float | None = None,
+    ) -> JobRow:
+        now = self._now()
+        with self._c:
+            cur = self._c.execute(
+                "INSERT INTO jobs(book_id, lang, provider, model, page_spec, pages_json, status, "
+                "budget_usd, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)",
+                (
+                    book_id,
+                    lang,
+                    provider,
+                    model,
+                    page_spec,
+                    json.dumps(list(pages)),
+                    budget_usd,
+                    now,
+                    now,
+                ),
+            )
+        job = self.get(int(cur.lastrowid or 0))
+        assert job is not None
+        return job
+
+    def get(self, job_id: int) -> JobRow | None:
+        row = self._c.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
+        return None if row is None else self._row(row)
+
+    def list_jobs(self, book_id: int | None = None) -> list[JobRow]:
+        if book_id is None:
+            rows = self._c.execute("SELECT * FROM jobs ORDER BY id DESC").fetchall()
+        else:
+            rows = self._c.execute(
+                "SELECT * FROM jobs WHERE book_id = ? ORDER BY id DESC", (book_id,)
+            ).fetchall()
+        return [self._row(r) for r in rows]
+
+    def update_progress(
+        self,
+        job_id: int,
+        *,
+        done_pages: Sequence[int],
+        failed: dict[int, str],
+        spent_usd: float,
+    ) -> None:
+        with self._c:
+            self._c.execute(
+                "UPDATE jobs SET done_pages_json = ?, failed_json = ?, spent_usd = ?, "
+                "updated_at = ? WHERE id = ?",
+                (
+                    json.dumps(sorted(set(done_pages))),
+                    json.dumps({str(k): v for k, v in sorted(failed.items())}),
+                    spent_usd,
+                    self._now(),
+                    job_id,
+                ),
+            )
+
+    def set_status(self, job_id: int, status: JobStatus, stop_reason: str | None = None) -> None:
+        with self._c:
+            self._c.execute(
+                "UPDATE jobs SET status = ?, stop_reason = ?, updated_at = ? WHERE id = ?",
+                (status, stop_reason, self._now(), job_id),
+            )
+
+    def request_pause(self, job_id: int) -> None:
+        with self._c:
+            self._c.execute(
+                "UPDATE jobs SET pause_requested = 1, updated_at = ? WHERE id = ?",
+                (self._now(), job_id),
+            )
+
+    def pause_requested(self, job_id: int) -> bool:
+        row = self._c.execute("SELECT pause_requested FROM jobs WHERE id = ?", (job_id,)).fetchone()
+        return bool(row is not None and row[0])
+
+    def clear_pause(self, job_id: int) -> None:
+        with self._c:
+            self._c.execute("UPDATE jobs SET pause_requested = 0 WHERE id = ?", (job_id,))
+
+    @staticmethod
+    def _row(r: sqlite3.Row) -> JobRow:
+        return JobRow(
+            id=r["id"],
+            book_id=r["book_id"],
+            type=r["type"],
+            lang=r["lang"],
+            provider=r["provider"],
+            model=r["model"],
+            page_spec=r["page_spec"],
+            pages=[int(p) for p in json.loads(r["pages_json"])],
+            status=r["status"],
+            budget_usd=r["budget_usd"],
+            spent_usd=float(r["spent_usd"]),
+            done_pages=[int(p) for p in json.loads(r["done_pages_json"])],
+            failed={int(k): str(v) for k, v in json.loads(r["failed_json"]).items()},
+            stop_reason=r["stop_reason"],
+            pause_requested=bool(r["pause_requested"]),
+            created_at=r["created_at"],
+            updated_at=r["updated_at"],
+        )
+
+
 @dataclass(frozen=True)
 class Repos:
     books: BookRepo
@@ -443,6 +604,7 @@ class Repos:
     page_status: PageStatusRepo
     usage: UsageRepo
     profiles: ProfileRepo
+    jobs: JobRepo
     conn: sqlite3.Connection = field(repr=False, compare=False)
 
     @classmethod
@@ -454,5 +616,6 @@ class Repos:
             page_status=PageStatusRepo(conn, clock),
             usage=UsageRepo(conn, clock),
             profiles=ProfileRepo(conn, clock),
+            jobs=JobRepo(conn, clock),
             conn=conn,
         )

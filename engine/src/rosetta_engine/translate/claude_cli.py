@@ -24,6 +24,7 @@ from rosetta_engine.errors import (
 )
 from rosetta_engine.translate.base import ProviderResult, TranslationRequest
 from rosetta_engine.translate.prompt import (
+    RESPONSE_SCHEMA,
     RESPONSE_SCHEMA_JSON,
     build_system_prompt,
     build_user_message,
@@ -101,6 +102,7 @@ def build_argv(
     strict: bool,
     effort: str | None = None,
     max_budget_usd: float | None = None,
+    json_schema: str | None = None,
 ) -> list[str]:
     argv = [
         CLAUDE_BIN, "-p",
@@ -117,8 +119,9 @@ def build_argv(
         argv += ["--effort", effort]
     if max_budget_usd is not None:
         argv += ["--max-budget-usd", f"{max_budget_usd:.4f}"]
-    if strict:
-        argv += ["--json-schema", RESPONSE_SCHEMA_JSON]
+    schema = json_schema if json_schema is not None else (RESPONSE_SCHEMA_JSON if strict else None)
+    if schema is not None:
+        argv += ["--json-schema", schema]
     return argv
 
 
@@ -195,6 +198,97 @@ def _check_budget(payload: dict[str, Any], result_text: str, spent: _Spent) -> N
     raise BudgetExceededError(f"bütçe sınırı aşıldı ({subtype or 'budget'})", **spent.kw())
 
 
+@dataclass(frozen=True)
+class Completion:
+    """One ``claude -p`` answer: the model text, optional structured output and usage."""
+
+    text: str
+    structured: dict[str, Any] | None
+    input_tokens: int
+    output_tokens: int
+    cost_usd: float
+
+
+def complete(
+    system_prompt: str,
+    user_message: str,
+    *,
+    model: str | None = None,
+    settings: Settings | None = None,
+    json_schema: dict[str, Any] | None = None,
+    runner: Runner = run_subprocess,
+    max_budget_usd: float | None = None,
+) -> Completion:
+    """Run one ``claude -p`` call (no tools, no session) and return its answer.
+
+    The prompt goes over stdin; the child env never carries ANTHROPIC_* or parent-session
+    vars. Raises UsageLimitError, ProviderAuthError, BudgetExceededError,
+    ProviderUnavailableError or ProviderError (with the call's usage attached when known).
+    """
+    settings = settings or load_settings()
+    model = model or settings.model
+    if shutil.which(CLAUDE_BIN) is None:
+        raise ProviderUnavailableError("claude CLI bulunamadı (PATH'te `claude` yok)")
+    budget = max_budget_usd if max_budget_usd is not None else settings.claude_max_budget_usd
+    argv = build_argv(
+        model,
+        system_prompt,
+        strict=False,
+        effort=settings.claude_effort,
+        max_budget_usd=budget,
+        json_schema=(
+            json.dumps(json_schema, separators=(",", ":")) if json_schema is not None else None
+        ),
+    )
+    log.debug("claude request (model=%s):\n%s", model, user_message)
+    try:
+        run = runner(
+            argv,
+            user_message,
+            float(settings.claude_timeout_s),
+            ensure_dir(data_dir()),
+            child_env(max_thinking_tokens=settings.claude_max_thinking_tokens),
+        )
+    except RunTimeout as e:
+        raise ProviderError(f"claude zaman aşımı ({settings.claude_timeout_s}s)") from e
+    except OSError as e:
+        raise ProviderError(f"claude çalıştırılamadı: {e}") from e
+
+    if run.stderr.strip():
+        log.warning("claude stderr: %s", run.stderr.strip()[:2000])
+
+    try:
+        payload = json.loads(run.stdout)
+    except json.JSONDecodeError:
+        payload = None
+    if not isinstance(payload, dict):
+        _classify(None, run.stdout + "\n" + run.stderr, _Spent())
+        raise ProviderError(
+            f"claude çıktısı JSON değil (exit {run.returncode}): {run.stderr.strip()[:300]}"
+        )
+
+    spent = _spent(payload)
+    result_text = payload.get("result")
+    result_str = result_text if isinstance(result_text, str) else ""
+    _check_budget(payload, result_str, spent)
+    if payload.get("is_error") or run.returncode != 0:
+        _classify(payload.get("api_error_status"), result_str + "\n" + run.stderr, spent)
+        raise ProviderError(
+            f"claude hata döndü (exit {run.returncode}, "
+            f"{payload.get('subtype')}): {result_str[:300]}",
+            **spent.kw(),
+        )
+    log.debug("claude response:\n%s", result_str)
+    structured = payload.get("structured_output")
+    return Completion(
+        text=result_str,
+        structured=structured if isinstance(structured, dict) else None,
+        input_tokens=spent.input_tokens,
+        output_tokens=spent.output_tokens,
+        cost_usd=spent.cost_usd,
+    )
+
+
 class ClaudeCliTranslator:
     name = "claude-cli"
 
@@ -213,60 +307,19 @@ class ClaudeCliTranslator:
         )
 
     def translate(self, request: TranslationRequest, *, strict: bool = False) -> ProviderResult:
-        if shutil.which(CLAUDE_BIN) is None:
-            raise ProviderUnavailableError("claude CLI bulunamadı (PATH'te `claude` yok)")
-        argv = build_argv(
-            self.model,
+        done = complete(
             build_system_prompt(request.lang),
-            strict=strict,
-            effort=self._settings.claude_effort,
+            build_user_message(request),
+            model=self.model,
+            settings=self._settings,
+            json_schema=RESPONSE_SCHEMA if strict else None,
+            runner=self._runner,
             max_budget_usd=self._max_budget_usd,
         )
-        message = build_user_message(request)
-        log.debug("claude request (model=%s, strict=%s):\n%s", self.model, strict, message)
-        try:
-            run = self._runner(
-                argv,
-                message,
-                float(self._settings.claude_timeout_s),
-                ensure_dir(data_dir()),
-                child_env(max_thinking_tokens=self._settings.claude_max_thinking_tokens),
-            )
-        except RunTimeout as e:
-            raise ProviderError(f"claude zaman aşımı ({self._settings.claude_timeout_s}s)") from e
-        except OSError as e:
-            raise ProviderError(f"claude çalıştırılamadı: {e}") from e
-
-        if run.stderr.strip():
-            log.warning("claude stderr: %s", run.stderr.strip()[:2000])
-
-        try:
-            payload = json.loads(run.stdout)
-        except json.JSONDecodeError:
-            payload = None
-        if not isinstance(payload, dict):
-            _classify(None, run.stdout + "\n" + run.stderr, _Spent())
-            raise ProviderError(
-                f"claude çıktısı JSON değil (exit {run.returncode}): {run.stderr.strip()[:300]}"
-            )
-
-        spent = _spent(payload)
-        result_text = payload.get("result")
-        result_str = result_text if isinstance(result_text, str) else ""
-        _check_budget(payload, result_str, spent)
-        if payload.get("is_error") or run.returncode != 0:
-            _classify(payload.get("api_error_status"), result_str + "\n" + run.stderr, spent)
-            raise ProviderError(
-                f"claude hata döndü (exit {run.returncode}, "
-                f"{payload.get('subtype')}): {result_str[:300]}",
-                **spent.kw(),
-            )
-        log.debug("claude response:\n%s", result_str)
-
+        spent = _Spent(done.input_tokens, done.output_tokens, done.cost_usd)
         expected = {i.id: len(i.sentences) for i in request.items}
         sources = {i.id: i.sentences for i in request.items}
-        structured = payload.get("structured_output")
-        raw: str | dict[str, Any] = structured if isinstance(structured, dict) else result_str
+        raw: str | dict[str, Any] = done.structured if done.structured is not None else done.text
         try:
             items = parse_response(raw, expected, sources)
         except InvalidTranslationError as e:

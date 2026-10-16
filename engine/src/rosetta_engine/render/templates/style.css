@@ -7,6 +7,7 @@
   --code-bg: #f1efe9;
   --accent: #b5502a;
   --hl: #ffe7a3;
+  --unknown: #2f6f8f;
   --serif: "Iowan Old Style", "Palatino Linotype", "Noto Serif", Georgia, serif;
   --sans: "Inter", "Noto Sans", "Segoe UI", system-ui, sans-serif;
   --mono: "JetBrains Mono", "Ubuntu Mono", "DejaVu Sans Mono", monospace;
@@ -14,7 +15,7 @@
 @media (prefers-color-scheme: dark) {
   :root {
     --bg: #1b1a18; --fg: #e8e5de; --muted: #9a968d; --rule: #34322e;
-    --code-bg: #252421; --accent: #e08a62; --hl: #5a4a17;
+    --code-bg: #252421; --accent: #e08a62; --hl: #5a4a17; --unknown: #8cc4de;
   }
 }
 * { box-sizing: border-box; }
@@ -57,7 +58,8 @@ aside.footnotes { margin-top: 2.5rem; padding-top: .8rem; border-top: 1px solid 
 .review .cell > :first-child { margin-top: 0; }
 .review .cell > :last-child { margin-bottom: 0; }
 .review [data-s] { border-radius: 2px; transition: background .1s; }
-.review .hl { background: var(--hl); }
+.review .hl, .review .pin { background: var(--hl); }
+.review .pin { outline: 1px solid var(--accent); }
 @media (max-width: 720px) { .review .row { grid-template-columns: 1fr; gap: .4rem; } }
 
 /* debug */
@@ -80,3 +82,10 @@ aside.footnotes { margin-top: 2.5rem; padding-top: .8rem; border-top: 1px solid 
 .index table { width: 100%; border-collapse: collapse; font-family: var(--sans); }
 .index td, .index th { text-align: left; padding: .35rem .5rem; border-bottom: 1px solid var(--rule); }
 .index a { color: var(--accent); }
+
+/* learn: original text, unknown words carry their Turkish meaning */
+.mode-learn .w { cursor: pointer; border-radius: 2px; }
+.mode-learn .w:hover { background: var(--hl); }
+.mode-learn .w.picked { outline: 1px solid var(--accent); }
+ruby.unknown { ruby-position: over; text-decoration: underline dotted var(--unknown); }
+ruby.unknown rt { font: 600 .62em var(--sans); color: var(--unknown); letter-spacing: 0; }

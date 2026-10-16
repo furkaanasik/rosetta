@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="{{ lang }}">
+<head>
+<meta charset="utf-8">
+<title>{{ book.title }}</title>
+<style>{{ base_css }}</style>
+<style>{{ print_css }}</style>
+<style>@page { size: {{ page_size }}; }</style>
+</head>
+<body class="export mode-{{ mode }}">
+{% if toc %}
+<nav class="toc">
+<h1 class="toc-title">İçindekiler</h1>
+<ol class="toc-list">
+{% for i in toc %}
+<li class="lv{{ i.level }}"><a href="#{{ i.anchor }}"><span class="t">{{ i.title }}</span><span class="n">{{ numbers.get(i.anchor, "") }}</span></a></li>
+{% endfor %}
+</ol>
+</nav>
+{% endif %}
+{% if mode == "bilingual" %}
+<div class="cols-head"><div>EN</div><div>{{ lang | upper }}</div></div>
+{% endif %}
+{% for s in sections %}
+<section class="src-page" id="{{ s.anchor }}" data-src-page="{{ s.page_no + 1 }}">
+<div class="src-label">s. {{ s.page_no + 1 }}</div>
+{{ s.html }}
+</section>
+{% endfor %}
+</body>
+</html>

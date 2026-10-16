@@ -161,5 +161,5 @@ class TranslationReport(BaseModel):
     done_pages: list[int] = Field(default_factory=list)
     failed_pages: dict[int, str] = Field(default_factory=dict)
     stopped_reason: str | None = None
-    stop_kind: Literal["usage_limit", "auth", "budget", "unavailable"] | None = None
+    stop_kind: Literal["usage_limit", "auth", "budget", "unavailable", "paused"] | None = None
     usage: UsageTotals = Field(default_factory=UsageTotals)

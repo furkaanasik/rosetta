@@ -36,8 +36,12 @@ from rosetta_engine.render.html_builder import write_index, write_page
 from rosetta_engine.store.db import connect, migrate
 from rosetta_engine.store.repo import Repos
 from rosetta_engine.translate.base import Translator
-from rosetta_engine.translate.claude_cli import CLAUDE_BIN, ClaudeCliTranslator
-from rosetta_engine.translate.fake import FakeTranslator
+from rosetta_engine.translate.claude_cli import CLAUDE_BIN
+from rosetta_engine.translate.providers import (
+    UnknownProviderError,
+    make_translator,
+    supports_profile,
+)
 from rosetta_engine.translate.service import PageTranslationService
 
 EXIT_OK = 0
@@ -59,7 +63,7 @@ _TYPE_LABELS = {
     BlockType.FOOTNOTE: "dipnot",
     BlockType.FURNITURE: "h/f",
 }
-_PAGE_FILE = re.compile(r"^p(\d{3,})\.(tr|review|debug)\.html$")
+_PAGE_FILE = re.compile(r"^p(\d{3,})\.(tr|review|learn|debug)\.html$")
 
 app = typer.Typer(no_args_is_help=True, add_completion=False, help="Rosetta PDF translation engine")
 console = Console()
@@ -135,15 +139,14 @@ def format_pages(pages: list[int]) -> str:
 
 
 def _translator(provider: str, model: str | None, settings: config.Settings) -> Translator:
-    if provider == "fake":
-        return FakeTranslator(model=model or "fake")
-    if provider == "claude-cli":
-        if shutil.which(CLAUDE_BIN) is None:
-            raise _fail(
-                ProviderUnavailableError("claude CLI bulunamadı; Claude Code kurulu ve PATH'te mi?")
-            )
-        return ClaudeCliTranslator(model=model or settings.model, settings=settings)
-    raise typer.BadParameter(f"unknown provider {provider!r}", param_hint="--provider")
+    if provider == "claude-cli" and shutil.which(CLAUDE_BIN) is None:
+        raise _fail(
+            ProviderUnavailableError("claude CLI bulunamadı; Claude Code kurulu ve PATH'te mi?")
+        )
+    try:
+        return make_translator(provider, model, settings)
+    except UnknownProviderError as e:
+        raise typer.BadParameter(str(e), param_hint="--provider") from e
 
 
 def apply_think(settings: config.Settings, think: Think | None) -> config.Settings:
@@ -168,12 +171,13 @@ class _Session:
     doc: pymupdf.Document
     meta: BookMeta
     pages: list[int]
+    repos: Repos
 
 
 @contextmanager
 def _session(
     pdf: Path,
-    pages: str,
+    pages: str | None,
     provider: str | None = None,
     model: str | None = None,
     max_budget_usd: float | None = None,
@@ -198,24 +202,42 @@ def _session(
         level = settings.thinking_level
         extra = settings.thinking_extra_output(model or settings.model)
     translator = _translator(provider, model, settings)
+    if not supports_profile(translator):
+        console.print(f"Not: Bu sağlayıcı ({provider}) kitap profilini/bağlamı kullanmaz.")
     conn = connect(config.db_path())
     try:
         migrate(conn)
+        repos = Repos.from_conn(conn)
         service = PageTranslationService(
-            translator, Repos.from_conn(conn), settings, thinking_output_per_call=extra
+            translator, repos, settings, thinking_output_per_call=extra
         )
         book, doc, meta = service.open_book(pdf)
         try:
-            page_list = parse_pages(pages, book.page_count)
+            page_list = parse_pages(pages or f"1-{book.page_count}", book.page_count)
             console.print(
                 f"Kitap: [bold]{book.title}[/] (hash {book.file_hash[:4]}…)  "
                 f"sayfa {format_pages(page_list)}"
             )
-            yield _Session(service, settings, provider, level, extra, book, doc, meta, page_list)
+            yield _Session(
+                service, settings, provider, level, extra, book, doc, meta, page_list, repos
+            )
         finally:
             doc.close()  # type: ignore[no-untyped-call]
     finally:
         conn.close()
+
+
+def _resolve_profile(explicit: BookProfile | None, s: _Session) -> BookProfile | None:
+    """``--profile`` wins; otherwise the book's stored profile (Faz 2), if any."""
+    if explicit is not None:
+        console.print(f"Profil: dosya ({len(explicit.glossary)} terim)")
+        return explicit
+    stored = s.repos.profiles.get(s.book.id)
+    if stored is None:
+        console.print("Profil: yok")
+        return None
+    console.print(f"Profil: DB ({len(stored.glossary)} terim)")
+    return stored
 
 
 def _load_profile(path: Path | None) -> BookProfile | None:
@@ -327,6 +349,7 @@ def estimate(
     book_profile = _load_profile(profile)
     try:
         with _session(pdf, pages, provider, model, max_budget_usd, think) as s:
+            book_profile = _resolve_profile(book_profile, s)
             plan = s.service.plan(
                 s.book,
                 s.doc,
@@ -361,6 +384,7 @@ def translate(
     book_profile = _load_profile(profile)
     try:
         with _session(pdf, pages, provider, model, max_budget_usd, think) as s:
+            book_profile = _resolve_profile(book_profile, s)
             target = lang or s.settings.default_lang
             plan = s.service.plan(
                 s.book, s.doc, s.meta, s.pages, target, profile=book_profile, force=force
@@ -451,3 +475,8 @@ def usage(
         )
     finally:
         conn.close()
+
+
+from rosetta_engine.commands import register_all  # noqa: E402
+
+register_all(app)

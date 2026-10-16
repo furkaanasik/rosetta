@@ -1,6 +1,7 @@
 {% extends "_base.html.j2" %}
 {% from "_macros.html.j2" import attrs, block, list_item, text %}
-{% block body_class %}mode-tr{% endblock %}
+{% block body_class %}mode-{{ mode or 'tr' }}{% endblock %}
+{% block nav %} · sayfa {{ page_label }}{% if mode == 'learn' %} · öğrenme{% endif %}{% endblock %}
 {% block content %}
 <main class="page" data-page="{{ page.page_no }}">
 {% for n in nodes %}
@@ -28,4 +29,18 @@
 </aside>
 {% endif %}
 </main>
+{% if mode == 'learn' %}
+<script>
+// Word click → event for the app shell (lookup/save); the page itself never calls an AI.
+document.querySelector('main.page').addEventListener('click', function (e) {
+  var w = e.target.closest('.w');
+  if (!w) return;
+  document.querySelectorAll('.w.picked').forEach(function (x) { x.classList.remove('picked'); });
+  w.classList.add('picked');
+  document.dispatchEvent(new CustomEvent('rosetta:word', {
+    detail: { word: w.dataset.w, lemma: w.dataset.l, block: (w.closest('[data-block]') || {}).dataset }
+  }));
+});
+</script>
+{% endif %}
 {% endblock %}

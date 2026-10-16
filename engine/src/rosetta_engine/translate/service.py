@@ -74,7 +74,8 @@ CONTEXT_PARAGRAPHS = 2
 OUTPUT_SANITY_FACTOR = 2
 MAX_CONSECUTIVE_ERRORS = 3
 Progress = Callable[[int, int], None]
-StopKind = Literal["usage_limit", "auth", "budget", "unavailable"]
+StopKind = Literal["usage_limit", "auth", "budget", "unavailable", "paused"]
+BatchCallback = Callable[[TranslationReport], None]
 
 
 @dataclass
@@ -338,8 +339,17 @@ class PageTranslationService:
         *,
         profile: BookProfile | None = None,
         on_progress: Progress | None = None,
+        should_stop: Callable[[], bool] | None = None,
+        budget_usd: float | None = None,
+        on_batch: BatchCallback | None = None,
     ) -> TranslationReport:
-        """Translate the planned batches. Each successful batch is cached immediately; a page
+        """Translate the planned batches.
+
+        ``should_stop`` is polled before every batch (True → stop_kind "paused");
+        ``budget_usd`` stops (stop_kind "budget") before a batch whose estimated cost would push
+        this run's spend over it; ``on_batch`` receives a progress snapshot after every batch.
+
+        Each successful batch is cached immediately; a page
         is marked done only once all its blocks are translated. ``--force`` replaces old rows
         only when the new ones exist, so a stopped run never loses earlier translations."""
         profile = profile or BookProfile()
@@ -373,9 +383,35 @@ class PageTranslationService:
                 self._save_page(book, p, lang, [], overwrite=force)
                 done.append(p)
 
+        def snapshot() -> TranslationReport:
+            return TranslationReport(
+                done_pages=sorted(done),
+                failed_pages=dict(failed),
+                stopped_reason=stopped,
+                stop_kind=stop_kind,
+                usage=tally.totals(),
+            )
+
+        price = self._s.price_for(self._t.model)
         total_batches = len(batches)
         for n, (batch, blocks) in enumerate(zip(plan.batches, batches, strict=True), start=1):
             blocks = [b for b in blocks if b.page_no not in failed]
+            if blocks and should_stop is not None and should_stop():
+                stopped, stop_kind = "pause requested", "paused"
+                log.info("translation paused before batch %d/%d", n, total_batches)
+                break
+            if blocks and budget_usd is not None and price is not None:
+                batch_usd = usd(
+                    batch.est_input_tokens, batch.est_output_tokens + self._thinking, price
+                )
+                if tally.cost_usd + batch_usd > budget_usd:
+                    stopped = (
+                        f"budget ${budget_usd:.4f} would be exceeded "
+                        f"(spent ${tally.cost_usd:.4f} + next batch ≈ ${batch_usd:.4f})"
+                    )
+                    stop_kind = "budget"
+                    log.warning("translation stopped: %s", stopped)
+                    break
             if blocks:
                 request = self._request(blocks, batch.context, lang, profile)
                 try:
@@ -405,14 +441,12 @@ class PageTranslationService:
                     self._store_batch(book, lang, blocks, result, needed, translated, done, force)
             if on_progress is not None:
                 on_progress(n, total_batches)
+            if on_batch is not None:
+                on_batch(snapshot())
+            if stop_kind is not None:
+                break
 
-        return TranslationReport(
-            done_pages=sorted(done),
-            failed_pages=failed,
-            stopped_reason=stopped,
-            stop_kind=stop_kind,
-            usage=tally.totals(),
-        )
+        return snapshot()
 
     def _store_batch(
         self,

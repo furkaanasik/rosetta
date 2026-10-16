@@ -1,0 +1,23 @@
+{% macro text(tv) -%}
+{% for s in tv.spans %}<span data-s="{{ loop.index0 }}">{{ s }}</span>{% if not loop.last %} {% endif %}{% endfor %}
+{%- endmacro %}
+
+{% macro attrs(v) -%}
+data-block="{{ v.data_block }}" class="{{ v.classes }}"{% if v.style %} style="{{ v.style }}"{% endif %}
+{%- endmacro %}
+
+{% macro block(v, tv) -%}
+{% if v.kind == "code" %}
+<pre {{ attrs(v) }}><code>{{ v.block.text }}</code></pre>
+{% elif v.kind in ("image", "table") %}
+{% if v.img %}<img {{ attrs(v) }} src="{{ v.img }}" alt="{{ v.kind }}">{% else %}<div {{ attrs(v) }} role="img">[{{ v.kind }}]</div>{% endif %}
+{% elif v.kind == "caption" %}
+<figcaption {{ attrs(v) }}>{{ text(tv) }}</figcaption>
+{% else %}
+<{{ v.tag }} {{ attrs(v) }}>{{ text(tv) }}</{{ v.tag }}>
+{% endif %}
+{%- endmacro %}
+
+{% macro list_item(v, tv) -%}
+<li {{ attrs(v) }}{% if v.block.list_marker %} data-marker="{{ v.block.list_marker }}"{% endif %}>{{ text(tv) }}</li>
+{%- endmacro %}

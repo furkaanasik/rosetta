@@ -1,0 +1,31 @@
+{% extends "_base.html.j2" %}
+{% from "_macros.html.j2" import attrs, block, list_item, text %}
+{% block body_class %}mode-tr{% endblock %}
+{% block content %}
+<main class="page" data-page="{{ page.page_no }}">
+{% for n in nodes %}
+{% if n.kind == "list" %}
+<{{ "ol" if n.ordered else "ul" }} class="list">
+{% for v in n.items %}
+{{ list_item(v, v.shown) }}
+{% endfor %}
+</{{ "ol" if n.ordered else "ul" }}>
+{% elif n.kind == "figure" %}
+<figure class="fig fig-{{ n.main.kind }}">
+{% for c in n.before %}{{ block(c, c.shown) }}{% endfor %}
+{{ block(n.main, n.main.shown) }}
+{% for c in n.after %}{{ block(c, c.shown) }}{% endfor %}
+</figure>
+{% else %}
+{{ block(n, n.shown) }}
+{% endif %}
+{% endfor %}
+{% if footnotes %}
+<aside class="footnotes">
+{% for v in footnotes %}
+<p {{ attrs(v) }}>{{ text(v.shown) }}</p>
+{% endfor %}
+</aside>
+{% endif %}
+</main>
+{% endblock %}

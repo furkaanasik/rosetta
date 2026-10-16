@@ -1,0 +1,13 @@
+<!doctype html>
+<html lang="{{ lang }}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}{{ book.title }} — s. {{ page_label }}{% endblock %}</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body class="{% block body_class %}{% endblock %}">
+<nav class="top"><a href="index.html">{{ book.title }}</a>{% block nav %} · sayfa {{ page_label }}{% endblock %}</nav>
+{% block content %}{% endblock %}
+</body>
+</html>

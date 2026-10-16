@@ -1,0 +1,32 @@
+{% extends "_base.html.j2" %}
+{% from "_macros.html.j2" import block, list_item, text %}
+{% block body_class %}mode-review{% endblock %}
+{% block nav %} · sayfa {{ page_label }} · EN | TR{% endblock %}
+{% block content %}
+<main class="review" data-page="{{ page.page_no }}">
+<div class="row head"><div>EN</div><div>TR</div></div>
+{% for v in rows + footnotes %}
+{% if v.kind in ("code", "image", "table") %}
+<div class="row full">{{ block(v, v.en) }}</div>
+{% else %}
+<div class="row{% if v.tr is none %} missing{% endif %}" data-aligned="{{ 1 if v.tr is not none and v.tr.aligned else 0 }}">
+<div class="cell en">{% if v.kind == "list_item" %}<ul class="list">{{ list_item(v, v.en) }}</ul>{% else %}{{ block(v, v.en) }}{% endif %}</div>
+<div class="cell tr">{% if v.tr is not none %}{% if v.kind == "list_item" %}<ul class="list">{{ list_item(v, v.tr) }}</ul>{% else %}{{ block(v, v.tr) }}{% endif %}{% else %}<p class="untranslated-note">—</p>{% endif %}</div>
+</div>
+{% endif %}
+{% endfor %}
+</main>
+<script>
+document.querySelectorAll('.row[data-aligned="1"]').forEach(function (row) {
+  row.addEventListener('mouseover', function (e) {
+    var s = e.target.closest('[data-s]');
+    row.querySelectorAll('.hl').forEach(function (x) { x.classList.remove('hl'); });
+    if (!s) return;
+    row.querySelectorAll('[data-s="' + s.dataset.s + '"]').forEach(function (x) { x.classList.add('hl'); });
+  });
+  row.addEventListener('mouseleave', function () {
+    row.querySelectorAll('.hl').forEach(function (x) { x.classList.remove('hl'); });
+  });
+});
+</script>
+{% endblock %}

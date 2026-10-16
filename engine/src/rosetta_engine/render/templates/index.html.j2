@@ -1,0 +1,16 @@
+{% extends "_base.html.j2" %}
+{% block title %}{{ book.title }}{% endblock %}
+{% block nav %} · {{ rows|length }} sayfa{% endblock %}
+{% block content %}
+<main class="index">
+<h1>{{ book.title }}</h1>
+<table>
+<thead><tr><th>Sayfa</th><th>Çıktılar</th></tr></thead>
+<tbody>
+{% for page_label, links in rows %}
+<tr><td>{{ page_label }}</td><td>{% for mode, href in links %}<a href="{{ href }}">{{ mode }}</a>{% if not loop.last %} · {% endif %}{% endfor %}</td></tr>
+{% endfor %}
+</tbody>
+</table>
+</main>
+{% endblock %}

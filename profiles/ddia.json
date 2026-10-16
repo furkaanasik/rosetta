@@ -1,0 +1,36 @@
+{
+  "tur": "teknik kitap (veri sistemleri)",
+  "ton": "açık, teknik, resmi olmayan akıcı Türkçe",
+  "hedef_dil": "tr",
+  "cevrilmeyecek": [
+    "SQL",
+    "NoSQL",
+    "OLTP",
+    "OLAP",
+    "JSON",
+    "Kafka",
+    "PostgreSQL"
+  ],
+  "sozluk": {
+    "vertex": "düğüm",
+    "vertices": "düğümler",
+    "edge": "kenar",
+    "set": "küme",
+    "timestamp": "zaman damgası",
+    "polling": "yoklama",
+    "fan-out": "yayılım (fan-out)",
+    "trade-off": "ödünleşim",
+    "home timeline": "ana zaman akışı",
+    "throughput": "işlem hacmi",
+    "latency": "gecikme",
+    "edges": "kenarlar",
+    "sets": "kümeler",
+    "timestamps": "zaman damgaları",
+    "trade-offs": "ödünleşimler",
+    "failure": "arıza",
+    "failures": "arızalar",
+    "materializing": "somutlaştırma",
+    "materialized": "somutlaştırılmış"
+  },
+  "kod_dili": []
+}

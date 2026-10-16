@@ -10,16 +10,31 @@ interface Props {
   onRendered?: (scale: number) => void;
   /** Block box (PDF points) to outline on the page. */
   highlight?: BBox | null;
+  /** Shrink the page to the pane width when `zoom` would overflow it (split mode). */
+  fitWidth?: boolean;
 }
 
 /** One PDF page rendered to a canvas inside its own scroll container. */
 export const PdfPageView = forwardRef<HTMLDivElement, Props>(function PdfPageView(
-  { doc, page, zoom, onScroll, onRendered, highlight },
+  { doc, page, zoom, onScroll, onRendered, highlight, fitWidth = false },
   ref,
 ) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [error, setError] = useState<string | null>(null);
   const [scale, setScale] = useState(zoom);
+  const [paneWidth, setPaneWidth] = useState(0);
+
+  useEffect(() => {
+    if (!fitWidth) return;
+    const pane = canvasRef.current?.closest<HTMLElement>(".pdf-pane");
+    if (!pane) return;
+    const update = () => setPaneWidth(pane.clientWidth);
+    update();
+    if (typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(update);
+    ro.observe(pane);
+    return () => ro.disconnect();
+  }, [fitWidth]);
 
   useEffect(() => {
     if (!doc) return;
@@ -29,7 +44,11 @@ export const PdfPageView = forwardRef<HTMLDivElement, Props>(function PdfPageVie
       try {
         const p = await doc.getPage(page);
         if (cancelled) return;
-        const viewport = p.getViewport({ scale: zoom });
+        // 32 px = the pane's horizontal padding.
+        const base = p.getViewport({ scale: 1 });
+        const fit = fitWidth && paneWidth > 0 ? (paneWidth - 32) / base.width : Infinity;
+        const effective = Math.max(0.25, Math.min(zoom, fit));
+        const viewport = p.getViewport({ scale: effective });
         const canvas = canvasRef.current;
         if (!canvas) return;
         const ratio = window.devicePixelRatio || 1;
@@ -46,8 +65,8 @@ export const PdfPageView = forwardRef<HTMLDivElement, Props>(function PdfPageVie
         await render.promise;
         if (!cancelled) {
           setError(null);
-          setScale(zoom);
-          onRendered?.(zoom);
+          setScale(effective);
+          onRendered?.(effective);
         }
       } catch (e) {
         if (!cancelled && !(e instanceof Error && e.name === "RenderingCancelledException"))
@@ -58,7 +77,7 @@ export const PdfPageView = forwardRef<HTMLDivElement, Props>(function PdfPageVie
       cancelled = true;
       task?.cancel();
     };
-  }, [doc, page, zoom, onRendered]);
+  }, [doc, page, zoom, onRendered, fitWidth, paneWidth]);
 
   return (
     <div

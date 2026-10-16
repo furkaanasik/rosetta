@@ -77,6 +77,7 @@ export function SplitView({ api, bookId, doc, page, zoom, revision, onWordClick 
         doc={doc}
         page={page}
         zoom={zoom}
+        fitWidth
         onScroll={onLeft}
         highlight={highlight ? blocks?.blocks.find((b) => b.key === highlight.block)?.bbox : null}
       />

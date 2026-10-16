@@ -162,6 +162,19 @@ def asset(book_id: int, name: str, eng: Engine) -> FileResponse:
     return FileResponse(target)
 
 
+@router.get("/books/{book_id}/file")
+def book_file(book_id: int, eng: Engine) -> FileResponse:
+    """The opened PDF itself (Bearer only), for PDF.js when the app runs in a plain browser."""
+    with eng.db() as s:
+        stored = s.repos.books.get(book_id)
+    if stored is None or not stored.file_path:
+        raise not_found(f"Kitap bulunamadı: #{book_id}")
+    path = Path(stored.file_path)
+    if not path.is_file():
+        raise not_found("Kitap dosyası artık yok")
+    return FileResponse(path, media_type="application/pdf")
+
+
 @router.get("/usage")
 def usage(eng: Engine, book_id: int | None = Query(default=None)) -> dict[str, Any]:
     with eng.db() as s:

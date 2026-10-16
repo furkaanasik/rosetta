@@ -72,3 +72,12 @@ def test_serve_random_token_when_not_given(tmp_path: Path) -> None:
 def test_serve_refuses_non_local_host(host: str) -> None:
     result = CliRunner().invoke(cli.app, ["serve", "--host", host])
     assert result.exit_code == 2
+
+
+def test_dev_fake_ai_flag_is_hidden_from_help() -> None:
+    from typer.testing import CliRunner
+
+    from rosetta_engine.cli import app
+
+    out = CliRunner().invoke(app, ["serve", "--help"]).output
+    assert "--dev-fake-ai" not in out

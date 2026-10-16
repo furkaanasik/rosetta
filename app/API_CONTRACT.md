@@ -77,6 +77,7 @@ Estimate {
 | GET | `/api/books/{id}/pages/{n}/blocks` | – | `PageBlocks {page, width, height, has_text_layer, blocks: [{key, order, type, bbox:[x0,y0,x1,y1] (PDF pt, top-left origin), translatable, translated}]}` (extracts on demand) |
 | GET | `/api/books/{id}/pages/{n}/html` | `?mode=tr\|review\|learn&lang=tr` | `PageHtml {page, mode, html, translated_blocks, translatable_blocks}` |
 | GET | `/api/books/{id}/assets/{name}` | `?token=` | image bytes (figure/table crops) |
+| GET | `/api/books/{id}/file` | – (Bearer only) | the PDF bytes (`application/pdf`); used by the app in a plain browser (dev/E2E), where it cannot read the local path |
 
 `html` is a **fragment** (no `<html>`, `<head>`, `<script>`, `<link>`), built by the engine's
 HTML builder with all book/model text escaped. It keeps `data-block`, `data-s` (sentence index) and,

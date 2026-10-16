@@ -217,6 +217,10 @@ export class MockEngineApi implements EngineApi {
     });
   }
 
+  bookFile(_bookId: number): Promise<ArrayBuffer | null> {
+    return Promise.resolve(null);
+  }
+
   assetUrl(_bookId: number, name: string): string {
     return `mock-assets/${name}`;
   }

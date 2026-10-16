@@ -35,6 +35,9 @@ export function LookupPopover({ api, target, bookId, page, onClose, onSaved, onE
     };
   }, [api, target.word]);
 
+  // Save only once the lookup settled, so the stored meaning isn't empty by accident.
+  const pending = !result && !error;
+
   const save = async (unknown: boolean) => {
     await api.addVocab({
       word: target.word,
@@ -71,10 +74,10 @@ export function LookupPopover({ api, target, bookId, page, onClose, onSaved, onE
         </>
       )}
       <div className="popover-actions">
-        <button type="button" onClick={() => void save(true)} disabled={saved}>
+        <button type="button" onClick={() => void save(true)} disabled={saved || pending}>
           {saved ? "Kaydedildi" : "Kaydet (bilmiyorum)"}
         </button>
-        <button type="button" onClick={() => void save(false)} disabled={saved}>
+        <button type="button" onClick={() => void save(false)} disabled={saved || pending}>
           Kaydet (biliyorum)
         </button>
         {target.sentence && (

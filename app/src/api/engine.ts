@@ -39,6 +39,8 @@ export interface EngineApi {
   pageBlocks(bookId: number, page: number): Promise<PageBlocks>;
   pageHtml(bookId: number, page: number, mode: HtmlMode, lang?: string): Promise<PageHtml>;
   assetUrl(bookId: number, name: string): string;
+  /** The PDF bytes (browser dev mode, where the file path can't be loaded directly); null if unavailable. */
+  bookFile(bookId: number): Promise<ArrayBuffer | null>;
 
   estimateTranslate(bookId: number, req: TranslateEstimateRequest): Promise<Estimate>;
   translate(bookId: number, confirmToken: string): Promise<TranslationReport>;

@@ -79,3 +79,47 @@ def test_invalid_reports_spent_tokens() -> None:
 
     assert exc.value.input_tokens == 100
     assert exc.value.output_tokens == 40
+
+
+def test_fake_complete_returns_profile_and_explanation_shapes() -> None:
+    from rosetta_engine.explain.explainer import build_system_prompt as explain_prompt
+    from rosetta_engine.profile.profiler import build_system_prompt as profile_prompt
+    from rosetta_engine.translate.fake import fake_complete
+
+    prof = fake_complete(profile_prompt("tr"), "TOC ...")
+    expl = fake_complete(explain_prompt("tr"), "SENTENCE:\nData is central.", json_schema={})
+
+    assert {"tur", "ton", "hedef_dil", "cevrilmeyecek", "sozluk", "kod_dili"} <= set(
+        __import__("json").loads(prof.text)
+    )
+    assert expl.structured is not None and "ceviri" in expl.structured
+    assert prof.cost_usd == 0.0
+
+
+def test_dev_fake_translator_fails_marker_once() -> None:
+    from rosetta_engine.errors import ProviderError
+    from rosetta_engine.translate.base import TranslationItem, TranslationRequest
+    from rosetta_engine.translate.fake import FAIL_ONCE_MARKER, DevFakeTranslator
+
+    DevFakeTranslator._failed_marker = False
+    req = TranslationRequest(
+        lang="tr", items=[TranslationItem(id=1, sentences=[f"x {FAIL_ONCE_MARKER}."])]
+    )
+    t = DevFakeTranslator()
+
+    with __import__("pytest").raises(ProviderError):
+        t.translate(req)
+    assert t.translate(req).items[1].sentences == [f"[TR] x {FAIL_ONCE_MARKER}."]
+
+
+def test_dev_fake_translator_with_real_provider_name_is_read_only() -> None:
+    from rosetta_engine.errors import ProviderUnavailableError
+    from rosetta_engine.translate.base import TranslationItem, TranslationRequest
+    from rosetta_engine.translate.fake import DevFakeTranslator
+
+    t = DevFakeTranslator(model="sonnet", provider="claude-cli")
+    req = TranslationRequest(lang="tr", items=[TranslationItem(id=1, sentences=["x."])])
+
+    assert t.name == "claude-cli"
+    with __import__("pytest").raises(ProviderUnavailableError):
+        t.translate(req)

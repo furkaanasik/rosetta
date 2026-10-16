@@ -49,6 +49,27 @@ RECORDS: list[dict[str, Any]] = [
         "word": "consumer group", "pos": "noun", "lang_code": "en",
         "senses": [{"glosses": ["A set of consumers reading a topic together."]}],
     },
+    {
+        "word": "the", "pos": "article", "lang_code": "en",
+        "senses": [{"glosses": ["Definite article."]}],
+    },
+    {
+        "word": "they", "pos": "pron", "lang_code": "en",
+        "senses": [{"glosses": ["Third person plural pronoun."]}],
+        "translations": [{"lang_code": "tr", "word": "onlar"}],
+        "forms": [{"form": "the", "tags": ["archaic"]}],
+    },
+    {
+        "word": "are", "pos": "noun", "lang_code": "en",
+        "senses": [{"glosses": ["A unit of area."]}],
+        "translations": [{"lang_code": "tr", "word": "ar"}],
+    },
+    {
+        "word": "be", "pos": "verb", "lang_code": "en",
+        "senses": [{"glosses": ["To exist."]}],
+        "translations": [{"lang_code": "tr", "word": "olmak"}],
+        "forms": [{"form": "are", "tags": ["present"]}],
+    },
     {"word": "Paris", "pos": "name", "lang_code": "en", "senses": [{"glosses": ["A city."]}]},
     {"word": "Haus", "pos": "noun", "lang_code": "de", "senses": [{"glosses": ["house"]}]},
 ]  # fmt: skip
@@ -149,6 +170,15 @@ def test_lookup_prefers_candidate_with_turkish(dictionary: Dictionary) -> None:
     assert dictionary.lemma_of("went") == "go"
 
 
+def test_function_and_auxiliary_words_keep_their_lemma(dictionary: Dictionary) -> None:
+    # "the" is listed as an archaic form of "they"; it must not become "they" book-wide.
+    assert dictionary.lookup("the").lemma == "the"
+    assert dictionary.lemma_of("The") == "the"
+    # "are" has its own noun entry (unit of area) but is the verb "be" in running text.
+    assert dictionary.lookup("are").lemma == "be"
+    assert dictionary.lookup("are").tr == ["olmak"]
+
+
 def test_lookup_phrase_and_missing(dictionary: Dictionary) -> None:
     assert dictionary.lookup("Consumer  Group").definitions[0].startswith("A set of")
     missing = dictionary.lookup("zzzz")
@@ -211,6 +241,15 @@ def test_save_word_with_context_creates_card(
     assert not again.created  # same lemma
     assert len(srs.due()) == 1
     assert vocab.count() == 1
+
+
+def test_blank_meaning_falls_back_to_dictionary(learn: Learn) -> None:
+    # The app may save before its lookup finished and send meaning="".
+    notebook, _, _ = learn
+
+    saved = notebook.save("latency", meaning="  ")
+
+    assert saved.vocab.meaning == "gecikme"
 
 
 def test_mark_known_unknown_book_wide(learn: Learn) -> None:

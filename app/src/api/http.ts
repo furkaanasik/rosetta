@@ -65,6 +65,19 @@ export class HttpEngineApi implements EngineApi {
     return u.toString();
   }
 
+  async bookFile(bookId: number): Promise<ArrayBuffer | null> {
+    let res: Response;
+    try {
+      res = await this.fetchFn(this.url(`/api/books/${bookId}/file`), {
+        headers: { Authorization: `Bearer ${this.token}` },
+      });
+    } catch (e) {
+      throw new EngineError("unavailable", `Motora ulaşılamıyor: ${String(e)}`);
+    }
+    if (!res.ok) return null;
+    return res.arrayBuffer();
+  }
+
   private async call<T>(method: Method, path: string, body?: unknown, query?: Query): Promise<T> {
     let res: Response;
     try {

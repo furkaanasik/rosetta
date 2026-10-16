@@ -66,7 +66,7 @@ class Notebook:
         """Save a word (keyed by lemma) with its context and schedule a flashcard.
 
         ``location`` = (page_no, block_ord, text_hash) when the caller already knows the block.
-        Meaning: explicit ``meaning`` → dictionary Turkish → book ``glossary`` (word or lemma).
+        Meaning: non-blank ``meaning`` → dictionary Turkish → book ``glossary`` (word or lemma).
         """
         clean = normalize(word)
         lemma = self._d.lemma_of(clean)
@@ -86,7 +86,7 @@ class Notebook:
             page_no=page_no,
             block_ord=ctx.block_ord,
             text_hash=ctx.text_hash,
-            meaning=meaning if meaning is not None else self._meaning(clean, lemma, glossary),
+            meaning=(meaning or "").strip() or self._meaning(clean, lemma, glossary),
             unknown=unknown,
         )
         if not created and unknown and not row.unknown:

@@ -28,3 +28,12 @@ describe("sanitizeEngineHtml", () => {
     expect(sanitizeEngineHtml(`<p>&lt;script&gt;</p>`, asset)).toBe("<p>&lt;script&gt;</p>");
   });
 });
+
+describe("callouts", () => {
+  it("turns ❶–❿ into a CSS-drawn digit", () => {
+    const out = sanitizeEngineHtml('<pre><code>x <span class="callout">❸</span></code></pre>', (n) => n);
+    expect(out).toContain('class="callout callout-num"');
+    expect(out).toContain(">3</span>");
+    expect(out).not.toContain("❸");
+  });
+});

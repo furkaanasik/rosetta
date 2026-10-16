@@ -10,8 +10,10 @@
     "preview": "vite preview",
     "lint": "eslint src",
     "typecheck": "tsc -b --noEmit",
-    "test": "vitest run",
-    "tauri": "tauri"
+    "test": "vitest run --dir src",
+    "tauri": "tauri",
+    "e2e": "node e2e/run.mjs",
+    "e2e:ddia": "node e2e/run.mjs --ddia"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.12.4",
@@ -23,6 +25,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@playwright/test": "1.64",
     "@tauri-apps/cli": "^2.12.3",
     "@testing-library/jest-dom": "^7.0.1",
     "@testing-library/react": "^16.3.3",

@@ -4,6 +4,7 @@ import { isExplanation } from "./api/engine";
 import { EngineError, type ExportMode, type Explanation, type UsageTotals } from "./api/types";
 import { ControlPanel } from "./components/ControlPanel";
 import { CostModal } from "./components/CostModal";
+import { ExplanationText } from "./components/ExplanationText";
 import { JobsPanel } from "./components/JobsPanel";
 import { LearnPanel } from "./components/LearnPanel";
 import { LookupPopover, type LookupTarget } from "./components/LookupPopover";
@@ -12,7 +13,7 @@ import { Sidebar } from "./components/Sidebar";
 import { StatusBar } from "./components/StatusBar";
 import { TopBar } from "./components/TopBar";
 import { pdfSource, pickPdf } from "./lib/engineConnect";
-import { parsePageSpec } from "./lib/format";
+import { parsePageSpec, stopReasonText } from "./lib/format";
 import { loadPdf, outline, type OutlineItem, type PdfDoc } from "./lib/pdf";
 import { useConfirmed } from "./lib/useConfirmed";
 import { initialState, reducer, type SidePanel } from "./state";
@@ -32,7 +33,7 @@ interface Props {
   api: EngineApi | null;
   mock: boolean;
   /** Test hook: skip PDF.js loading. */
-  loadDocument?: (src: string) => Promise<PdfDoc>;
+  loadDocument?: (src: string | ArrayBuffer) => Promise<PdfDoc>;
 }
 
 export function App({ api, mock, loadDocument = loadPdf }: Props) {
@@ -76,8 +77,10 @@ export function App({ api, mock, loadDocument = loadPdf }: Props) {
       const book = await api.openBook(path);
       const src = await pdfSource(path);
       dispatch({ type: "bookOpened", book, pdfSrc: src });
-      if (src) {
-        const d = await loadDocument(src);
+      // In Tauri the file is loaded directly; in a plain browser (dev/E2E) it comes from the engine.
+      const data = src ?? (await api.bookFile(book.id));
+      if (data) {
+        const d = await loadDocument(data);
         setDoc(d);
         setToc(await outline(d));
       } else {
@@ -102,7 +105,7 @@ export function App({ api, mock, loadDocument = loadPdf }: Props) {
       (r) => {
         const failed = Object.keys(r.failed_pages).length;
         say(failed ? `${failed} sayfa hatalı: ${Object.values(r.failed_pages)[0] ?? ""}` : "Sayfa çevrildi.");
-        if (r.stop_kind) onError(new EngineError(r.stop_kind === "paused" ? "internal" : r.stop_kind, r.stopped_reason ?? ""));
+        if (r.stop_kind) onError(new EngineError(r.stop_kind === "paused" ? "internal" : r.stop_kind, stopReasonText(r.stopped_reason ?? "")));
         afterAi();
       },
     );
@@ -261,7 +264,7 @@ export function App({ api, mock, loadDocument = loadPdf }: Props) {
           <div className="modal" role="dialog" aria-modal="true" aria-label="Açıklama" onClick={(e) => e.stopPropagation()}>
             <h2>Açıklama {explanation.cached && <span className="badge done">cache</span>}</h2>
             <blockquote>{explanation.text}</blockquote>
-            <p className="explanation">{explanation.explanation}</p>
+            <ExplanationText text={explanation.explanation} />
             <div className="modal-actions">
               <button type="button" onClick={() => setExplanation(null)}>Kapat</button>
             </div>

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import type { EngineApi } from "../api/engine";
 import type { Estimate, Job } from "../api/types";
-import { usd } from "../lib/format";
+import { stopReasonText, usd } from "../lib/format";
 
 const STATUS: Record<Job["status"], string> = {
   pending: "Bekliyor",
@@ -63,7 +63,7 @@ export function JobsPanel({ api, bookId, refreshKey, requestConfirmed, onChange 
               {j.done_pages.length}/{j.pages.length} sayfa · harcanan {usd(j.spent_usd)}
               {j.budget_usd !== null && ` / bütçe ${usd(j.budget_usd)}`}
             </p>
-            {j.stop_reason && <p className="small warn">{j.stop_reason}</p>}
+            {j.stop_reason && <p className="small warn">{stopReasonText(j.stop_reason)}</p>}
             {failed.length > 0 && (
               <details>
                 <summary>{failed.length} hatalı sayfa</summary>

@@ -21,6 +21,18 @@ def register(app: typer.Typer) -> None:
             str | None, typer.Option("--token", help="İstek belirteci (varsayılan: rastgele)")
         ] = None,
         host: Annotated[str, typer.Option("--host", help="Yalnızca 127.0.0.1")] = "127.0.0.1",
+        dev_fake_ai: Annotated[
+            bool,
+            typer.Option(
+                "--dev-fake-ai",
+                hidden=True,
+                help="Yalnızca geliştirme/E2E: tüm AI çağrıları sahte (claude çağrılmaz)",
+            ),
+        ] = False,
+        dev_fake_delay: Annotated[
+            float,
+            typer.Option("--dev-fake-delay", hidden=True, help="Sahte AI: çağrı başı gecikme (sn)"),
+        ] = 0.0,
     ) -> None:
         """API sunucusu: hazır olunca stdout'a tek satır {"port", "token"} JSON basar."""
         import uvicorn
@@ -45,7 +57,23 @@ def register(app: typer.Typer) -> None:
         sock.listen(128)
         sock.set_inheritable(True)
         bound = sock.getsockname()[1]
-        api = create_app(settings, token=secret)
+        if dev_fake_ai:
+            from rosetta_engine.translate.fake import DevFakeTranslator, fake_complete
+
+            typer.echo("UYARI: --dev-fake-ai açık — AI çağrıları sahte (geliştirme modu)", err=True)
+
+            def fake_factory(
+                provider: str, model: str | None, settings: config.Settings
+            ) -> DevFakeTranslator:
+                return DevFakeTranslator(
+                    model=model or settings.model, delay_s=dev_fake_delay, provider=provider
+                )
+
+            api = create_app(
+                settings, token=secret, translator_factory=fake_factory, complete_fn=fake_complete
+            )
+        else:
+            api = create_app(settings, token=secret)
         server = uvicorn.Server(
             uvicorn.Config(api, log_level="warning", access_log=False, lifespan="on")
         )

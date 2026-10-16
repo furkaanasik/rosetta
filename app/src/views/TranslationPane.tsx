@@ -15,6 +15,14 @@ interface Props {
   highlight?: { block: string; sentence: number | null } | null;
 }
 
+/** Sentence text without learn-mode ruby annotations (the <rt> Turkish glosses). */
+function sentenceText(el: HTMLElement | null | undefined): string {
+  if (!el) return "";
+  const copy = el.cloneNode(true) as HTMLElement;
+  copy.querySelectorAll("rt").forEach((rt) => rt.remove());
+  return (copy.textContent ?? "").replace(/\s+/g, " ").trim();
+}
+
 /**
  * Renders the engine's HTML fragment. No scripts from the HTML ever run (sanitized + CSP);
  * interaction is handled here through data-block / data-s / data-word attributes.
@@ -50,9 +58,11 @@ export const TranslationPane = forwardRef<HTMLDivElement, Props>(function Transl
       const blockKey = blockEl?.dataset.block ?? null;
       const sEl = target.closest<HTMLElement>("[data-s]");
       const sentence = sEl?.dataset.s !== undefined ? Number(sEl.dataset.s) : null;
-      const wordEl = target.closest<HTMLElement>("[data-word]");
+      // Learn-mode HTML wraps every word as <span data-w="…" data-l="lemma">.
+      const wordEl = target.closest<HTMLElement>("[data-w], [data-word]");
       if (wordEl && onWordClick) {
-        onWordClick(wordEl.dataset.word ?? wordEl.textContent ?? "", sEl?.textContent ?? "", blockKey);
+        const word = wordEl.dataset.w ?? wordEl.dataset.word ?? wordEl.textContent ?? "";
+        onWordClick(word, sentenceText(sEl), blockKey);
         return;
       }
       if (blockKey) onBlockClick?.(blockKey, sentence);
@@ -68,7 +78,7 @@ export const TranslationPane = forwardRef<HTMLDivElement, Props>(function Transl
     const anchor = sel?.anchorNode?.parentElement ?? null;
     const sEl = anchor?.closest<HTMLElement>("[data-s]");
     const blockKey = anchor?.closest<HTMLElement>("[data-block]")?.dataset.block ?? null;
-    onWordClick(text, sEl?.textContent ?? "", blockKey);
+    onWordClick(text, sentenceText(sEl), blockKey);
   }, [onWordClick, mode]);
 
   const highlightCss = highlight

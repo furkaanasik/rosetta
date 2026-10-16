@@ -40,6 +40,15 @@ iptal), kitap profili (oku, yaz, analiz tahmini, analiz), PDF dışa aktarma, ö
 kelime defteri, sırası gelen kartlar, değerlendirme, istatistik, terimler), "Bunu açıkla" ve
 kullanım toplamları. Sayfa numaraları API'de 1 tabanlıdır.
 
+## Geliştirme / E2E modu
+
+`rosetta serve --dev-fake-ai [--dev-fake-delay SN]` (gizli bayraklar, `--help`'te görünmez): çeviri
+sahte çevirmenle, profil ve "Bunu açıkla" sahte `complete` ile yanıtlanır; gerçek AI çağrısı
+yapılamaz. `provider = "fake"` dışındaki sağlayıcı adları bu modda yalnızca okumak içindir (mevcut
+çeviriler görünür, yeni çeviri `unavailable` döner). Paketli uygulama bu bayrağı hiç geçirmez.
+`GET /api/books/{id}/file` (yalnızca Bearer) PDF'in kendisini döner; tarayıcıda çalışan uygulama
+yerel dosyayı okuyamadığı için PDF.js bunu kullanır.
+
 ## Eşzamanlılık
 
 - Her istek kendi SQLite bağlantısını açar (WAL). PyMuPDF belgeleri kitap başına önbelleğe alınır

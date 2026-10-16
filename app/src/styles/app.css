@@ -211,7 +211,8 @@ select {
 }
 .split {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  /* minmax(0, …): a zoomed PDF canvas scrolls inside its pane instead of widening the column. */
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   width: 100%;
   min-height: 0;
 }
@@ -221,6 +222,7 @@ select {
 .pane {
   overflow: auto;
   min-height: 0;
+  min-width: 0;
   width: 100%;
   padding: 16px;
 }
@@ -301,6 +303,29 @@ select {
   font-family: var(--sans);
   font-weight: 700;
   color: var(--accent);
+}
+/* ❶-style markers drawn with CSS (see sanitize.ts): white digit on a filled circle, like the book. */
+.engine-html .callout-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.25em;
+  height: 1.25em;
+  border-radius: 50%;
+  background: var(--ink);
+  color: var(--bg);
+  font: 700 0.72em/1 var(--sans);
+  vertical-align: 0.1em;
+}
+/* Numbered explanation lists whose number is the callout itself. */
+.engine-html li.callout-item {
+  list-style: none;
+  position: relative;
+}
+.engine-html li.callout-item > .callout {
+  position: absolute;
+  left: -1.8em;
+  top: 0.3em;
 }
 
 /* Right bar */

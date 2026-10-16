@@ -4,3 +4,6 @@ src-tauri/target/
 src-tauri/gen/
 src-tauri/binaries/rosetta-engine-*
 *.tsbuildinfo
+test-results/
+playwright-report/
+e2e/screenshots/

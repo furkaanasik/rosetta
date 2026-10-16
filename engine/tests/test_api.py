@@ -244,6 +244,17 @@ def test_assets_need_token_and_block_traversal(
         err(client.get(f"/api/books/{book['id']}/assets/{bad}?token={TOKEN}"), "not_found", 404)
 
 
+def test_book_file_served_with_bearer_only(client: TestClient, book_pdf: Path) -> None:
+    book = open_book(client, book_pdf)
+    url = f"/api/books/{book['id']}/file"
+    err(client.get(url), "unauthorized", 401)
+    err(client.get(f"{url}?token={TOKEN}"), "unauthorized", 401)  # query token: assets only
+    r = client.get(url, headers=AUTH)
+    assert r.status_code == 200 and r.content.startswith(b"%PDF")
+    assert r.headers["content-type"] == "application/pdf"
+    err(client.get("/api/books/999/file", headers=AUTH), "not_found", 404)
+
+
 # --- translation ------------------------------------------------------------------------------
 
 

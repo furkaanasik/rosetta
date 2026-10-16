@@ -23,3 +23,13 @@ export function parsePageSpec(spec: string, pageCount: number): number[] {
   if (!out.size) throw new Error("Sayfa girilmedi");
   return [...out].sort((x, y) => x - y);
 }
+
+/** Turkish text for the engine's (English) job/translation stop reasons; unknown ones pass through. */
+export function stopReasonText(reason: string): string {
+  if (reason === "pause requested") return "Duraklatma istendi.";
+  const budget = /^budget \$([\d.]+) would be exceeded \(spent \$([\d.]+) \+ next batch ≈ \$([\d.]+)\)$/.exec(reason);
+  if (budget) return `Bütçe sınırı ($${budget[1]}) aşılacaktı: harcanan $${budget[2]} + sonraki batch ≈ $${budget[3]}.`;
+  const errors = /^(\d+) consecutive provider errors; last: (.*)$/s.exec(reason);
+  if (errors) return `Üst üste ${errors[1]} sağlayıcı hatası; sonuncusu: ${errors[2]}`;
+  return reason;
+}

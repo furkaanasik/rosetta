@@ -33,6 +33,97 @@ SOURCE_LICENSE = (
 )
 TARGET_LANG = "tr"
 MAX_GLOSSES = 4  # per entry; keeps the file small while covering the main senses
+# Articles, determiners, pronouns, prepositions and conjunctions: always their own lemma.
+FUNCTION_WORDS = frozenset(
+    [
+        "a",
+        "an",
+        "the",
+        "this",
+        "that",
+        "these",
+        "those",
+        "some",
+        "any",
+        "each",
+        "every",
+        "no",
+        "all",
+        "both",
+        "either",
+        "neither",
+        "i",
+        "me",
+        "my",
+        "mine",
+        "you",
+        "your",
+        "yours",
+        "he",
+        "him",
+        "his",
+        "she",
+        "her",
+        "hers",
+        "it",
+        "its",
+        "we",
+        "us",
+        "our",
+        "ours",
+        "they",
+        "them",
+        "their",
+        "theirs",
+        "who",
+        "whom",
+        "whose",
+        "which",
+        "what",
+        "of",
+        "to",
+        "in",
+        "on",
+        "at",
+        "by",
+        "for",
+        "with",
+        "from",
+        "into",
+        "onto",
+        "upon",
+        "about",
+        "over",
+        "under",
+        "after",
+        "before",
+        "between",
+        "through",
+        "during",
+        "without",
+        "within",
+        "and",
+        "or",
+        "but",
+        "nor",
+        "so",
+        "yet",
+        "if",
+        "than",
+        "then",
+        "as",
+        "because",
+        "while",
+        "although",
+        "though",
+    ]
+)
+# Auxiliary verb forms whose spelling is also a rare noun ("are" = unit of area).
+AUXILIARY_LEMMAS = {
+    **dict.fromkeys(("am", "is", "are", "was", "were", "been", "being"), "be"),
+    **dict.fromkeys(("has", "had", "having"), "have"),
+    **dict.fromkeys(("does", "did", "done", "doing"), "do"),
+}
 SKIP_POS = frozenset({"name", "character", "symbol", "punct", "romanization"})
 
 _SCHEMA = """
@@ -292,6 +383,15 @@ class Dictionary:
         query = normalize(text)
         if self._conn is None or not query:
             return LookupResult(query=query, lemma=query, tr=[], definitions=[])
+        if query in AUXILIARY_LEMMAS:
+            lemma = AUXILIARY_LEMMAS[query]
+            tr, defs = self._raw(lemma)
+            return LookupResult(query=query, lemma=lemma, tr=tr, definitions=defs)
+        if query in FUNCTION_WORDS:
+            # Closed-class words are their own lemma; the inflection table has archaic links
+            # (e.g. "the" listed as a form of "they") that would otherwise win.
+            tr, defs = self._raw(query)
+            return LookupResult(query=query, lemma=query, tr=tr, definitions=defs)
         candidates = [query, *self._bases(query)]
         if " " not in query:
             candidates.append(lemmatize(query))

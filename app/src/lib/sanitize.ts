@@ -41,5 +41,16 @@ export function sanitizeEngineHtml(html: string, assetUrl: (name: string) => str
       else if (!/^(https?:|data:image\/)/i.test(src)) el.removeAttribute("src");
     }
   }
+  // Code callouts ❶–❿ (U+2776–U+277F) need a symbol font that may not be installed: draw them
+  // as CSS circles with the plain digit instead.
+  for (const el of Array.from(root.querySelectorAll<HTMLElement>(".callout"))) {
+    const code = (el.textContent ?? "").trim().codePointAt(0) ?? 0;
+    if (code >= 0x2776 && code <= 0x277f) {
+      const n = String(code - 0x2775);
+      el.textContent = n;
+      el.classList.add("callout-num");
+      el.setAttribute("aria-label", n);
+    }
+  }
   return root.innerHTML;
 }

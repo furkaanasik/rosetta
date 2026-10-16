@@ -5,9 +5,9 @@
 <main class="page" data-page="{{ page.page_no }}">
 {% for n in nodes %}
 {% if n.kind == "list" %}
-<{{ "ol" if n.ordered else "ul" }} class="list">
+<{{ "ol" if n.ordered else "ul" }} class="list"{% if n.start is not none and n.start != 1 %} start="{{ n.start }}"{% endif %}>
 {% for v in n.items %}
-{{ list_item(v, v.shown) }}
+{{ list_item(v, v.shown, n.values[loop.index0]) }}
 {% endfor %}
 </{{ "ol" if n.ordered else "ul" }}>
 {% elif n.kind == "figure" %}

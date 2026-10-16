@@ -1,8 +1,8 @@
 """Blocks + translations -> local HTML pages (translation, EN|TR review, extractor debug).
 
-LLM output is untrusted: every text goes through :func:`inline`, which escapes first and only
-then adds our own ``<code>`` tags. Templates use autoescape; no other ``Markup`` is built from
-book or model text.
+LLM output is untrusted: every text goes through :func:`inline` (or :func:`code_markup` for code
+blocks), which escapes first and only then adds our own ``<code>``/``<span>`` tags. Templates
+use autoescape; no other ``Markup`` is built from book or model text.
 """
 
 from __future__ import annotations
@@ -28,7 +28,11 @@ STYLE_FILE = "style.css"
 CROP_DPI = 150
 
 _BACKTICK = re.compile(r"``(.+?)``|`([^`]+)`")
-_NUMERIC_MARKER = re.compile(r"^\(?\d{1,3}[.)]?$")
+_NUMERIC_MARKER = re.compile(r"^\(?(\d{1,3})[.)]?$")
+_CALLOUT_MARKER = re.compile(r"^\d{1,2}$")  # bare digit: vector-drawn ❶-style marker
+_CALLOUT_CHARS = re.compile("[\u2776-\u277f]")  # ❶ … ❿
+_CALLOUT_FIRST = 0x2776
+_CALLOUT_MAX = 10
 _FIGURE_TYPES = frozenset({BlockType.IMAGE, BlockType.TABLE, BlockType.CODE})
 
 _env = Environment(
@@ -51,6 +55,34 @@ def inline(text: str) -> Markup:
         pos = m.end()
     parts.append(escape(text[pos:]))
     return Markup("").join(parts)
+
+
+def code_markup(text: str) -> Markup:
+    """Escape a code block and wrap ❶–❿ callout characters in ``<span class="callout">``."""
+    parts: list[Markup] = []
+    pos = 0
+    for m in _CALLOUT_CHARS.finditer(text):
+        parts.append(escape(text[pos : m.start()]))
+        parts.append(Markup('<span class="callout">') + escape(m.group()) + Markup("</span>"))
+        pos = m.end()
+    parts.append(escape(text[pos:]))
+    return Markup("").join(parts)
+
+
+def marker_number(marker: str | None) -> int | None:
+    """``"3"``, ``"3."``, ``"(3)"`` → 3; bullets and ``""`` → None."""
+    if not marker:
+        return None
+    m = _NUMERIC_MARKER.match(marker)
+    return int(m.group(1)) if m else None
+
+
+def callout_glyph(marker: str | None) -> str | None:
+    """Bare digit markers (from vector-drawn callouts) → the matching ❶… character."""
+    if not marker or not _CALLOUT_MARKER.match(marker):
+        return None
+    n = int(marker)
+    return chr(_CALLOUT_FIRST + n - 1) if 1 <= n <= _CALLOUT_MAX else None
 
 
 def page_filename(page_no: int, mode: Mode) -> str:
@@ -77,6 +109,9 @@ class BlockView:
     tag: str = "p"
     img: str | None = None
     tooltip: str = ""
+    code: Markup | None = None  # escaped code block text (CODE only)
+    number: int | None = None  # list item number from a numeric marker
+    callout: str | None = None  # ❶… glyph for vector-drawn callout markers
 
     @property
     def kind(self) -> str:
@@ -91,6 +126,8 @@ class BlockView:
 class ListView:
     ordered: bool
     items: list[BlockView]
+    start: int | None = None  # <ol start>
+    values: list[int | None] = field(default_factory=list)  # <li value> per item
     kind: str = "list"
 
 
@@ -185,6 +222,10 @@ def _view(
         tag = "li"
 
     img = _crop(block, out_dir, doc) if block.type in (BlockType.IMAGE, BlockType.TABLE) else None
+    is_item = block.type is BlockType.LIST_ITEM
+    callout = callout_glyph(block.list_marker) if is_item else None
+    if callout:
+        classes.append("callout-item")
     return BlockView(
         block=block,
         data_block=f"{block.page_no}-{block.order}",
@@ -195,12 +236,30 @@ def _view(
         tag=tag,
         img=img,
         tooltip=_tooltip(block),
+        code=code_markup(block.text) if block.type is BlockType.CODE else None,
+        number=marker_number(block.list_marker) if is_item else None,
+        callout=callout,
     )
 
 
 def _ordered(items: Sequence[BlockView]) -> bool:
     markers = [v.block.list_marker for v in items]
     return all(m is not None and (m == "" or _NUMERIC_MARKER.match(m)) for m in markers)
+
+
+def _list(run: list[BlockView]) -> ListView:
+    """Build a list node: ``start`` from the first number, ``value`` where numbering jumps."""
+    ordered = _ordered(run)
+    numbers = [v.number for v in run]
+    if not ordered or numbers[0] is None:
+        return ListView(ordered=ordered, items=run, values=[None] * len(run))
+    first = numbers[0]
+    consecutive = all(n == first + k for k, n in enumerate(numbers))
+    values = [
+        n if (not consecutive or v.callout) and n is not None else None
+        for v, n in zip(run, numbers, strict=True)
+    ]
+    return ListView(ordered=True, items=run, start=first, values=values)
 
 
 def _group(views: Sequence[BlockView]) -> list[Node]:
@@ -218,7 +277,7 @@ def _group(views: Sequence[BlockView]) -> list[Node]:
                 run.append(views[i])
             nodes.extend(pending)
             pending = []
-            nodes.append(ListView(ordered=_ordered(run), items=run))
+            nodes.append(_list(run))
         elif t in _FIGURE_TYPES:
             nodes.append(FigureView(main=v, before=pending))
             pending = []

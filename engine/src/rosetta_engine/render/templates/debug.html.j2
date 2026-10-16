@@ -1,5 +1,5 @@
 {% extends "_base.html.j2" %}
-{% from "_macros.html.j2" import block, list_item, text %}
+{% from "_macros.html.j2" import block, lone_item, text %}
 {% block body_class %}mode-debug{% endblock %}
 {% block nav %} · sayfa {{ page_label }} · debug · {{ views|length }} block{% if not page.has_text_layer %} · METİN KATMANI YOK{% endif %}{% if page.continues_on_next_page %} · sonraki sayfada devam{% endif %}{% endblock %}
 {% block content %}
@@ -10,7 +10,7 @@
 {% for v in views %}
 <section class="dbg t-{{ v.kind }}{% if v.block.aside %} is-aside{% endif %}" title="{{ v.tooltip }}">
 <span class="badge">{{ v.block.order }} · {{ v.kind }}{% if v.block.heading_level is not none %} h{{ v.block.heading_level }}{% endif %}{% if v.block.aside %} · aside{% endif %}{% if v.block.list_marker is not none %} · marker “{{ v.block.list_marker }}”{% endif %}</span>
-{% if v.kind == "list_item" %}<ul class="list">{{ list_item(v, v.en) }}</ul>{% else %}{{ block(v, v.en) }}{% endif %}
+{% if v.kind == "list_item" %}{{ lone_item(v, v.en) }}{% else %}{{ block(v, v.en) }}{% endif %}
 </section>
 {% endfor %}
 </main>

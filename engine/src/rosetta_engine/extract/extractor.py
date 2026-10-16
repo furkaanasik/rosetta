@@ -32,9 +32,10 @@ from rosetta_engine.extract.classify import (
 from rosetta_engine.extract.figures import analyze_figures
 from rosetta_engine.extract.fonts import font_family, is_monospace
 from rosetta_engine.extract.furniture import FurnitureModel, build_furniture, is_furniture
-from rosetta_engine.extract.geometry import union
+from rosetta_engine.extract.geometry import union, v_overlap
 from rosetta_engine.extract.layout import LayoutItem, reading_order
-from rosetta_engine.extract.pdf_reader import RawBlock, RawLine, RawSpan, read_page
+from rosetta_engine.extract.markers import Marker, assign_numbers, detect, needs_previous, to_char
+from rosetta_engine.extract.pdf_reader import RawBlock, RawLine, RawPage, RawSpan, read_page
 from rosetta_engine.extract.sentences import split_sentences
 from rosetta_engine.extract.stats import TypographyStats, compute_stats, sample_pages
 from rosetta_engine.extract.text_clean import (
@@ -45,10 +46,12 @@ from rosetta_engine.extract.text_clean import (
 )
 from rosetta_engine.models import TRANSLATABLE, BBox, Block, BlockType, PageBlocks, text_hash
 
-EXTRACTOR_VERSION = 1
+EXTRACTOR_VERSION = 2  # 2: vector callout markers (❶ in code, numbered list markers)
 
 CODE_MERGE_GAP = 16.0  # consecutive code blocks closer than this are one listing
 DROP_CAP_RATIO = 2.0
+CALLOUT_TOL = 2.0  # pt; a code callout belongs to a code unit whose y-range (± this) holds it
+LIST_MARKER_GAP = 15.0  # pt between a vector list marker's right edge and the item text
 _SENTENCE_END = re.compile(r"[.:!?][\"”’)\]]*$")
 
 
@@ -177,18 +180,39 @@ def _segments(line: RawLine) -> list[Seg]:
     ]
 
 
-def _unit_text(unit: Unit, kind: BlockType, marker: str | None, soft: str) -> str:
+def _callout_suffixes(unit: Unit, callouts: Sequence[Marker]) -> dict[int, str]:
+    """Line index -> " ❸ ❹" for the callouts drawn on that line of a code unit."""
+    out: dict[int, str] = {}
+    for m in sorted(callouts, key=lambda m: m.bbox[0]):
+        if m.number is None or not unit.lines:
+            continue
+        i = min(
+            range(len(unit.lines)),
+            key=lambda k: abs((unit.lines[k].bbox[1] + unit.lines[k].bbox[3]) / 2 - m.y_center),
+        )
+        out[i] = out.get(i, "") + " " + to_char(m.number)
+    return out
+
+
+def _unit_text(
+    unit: Unit,
+    kind: BlockType,
+    marker: str | None,
+    soft: str,
+    callouts: Sequence[Marker] = (),
+) -> str:
     if kind == BlockType.CODE:
+        suffix = _callout_suffixes(unit, callouts)
         st = style_of(unit.lines)
         left = min(ln.bbox[0] for ln in unit.lines)
         raw: list[tuple[float, str]] = []
         prev_bottom: float | None = None
         line_h = st.size * 1.2 if st.size else 10.0
-        for ln in unit.lines:
+        for k, ln in enumerate(unit.lines):
             if prev_bottom is not None:
                 blanks = round((ln.bbox[1] - prev_bottom) / line_h)
                 raw.extend((left, "") for _ in range(max(0, blanks)))
-            raw.append((ln.bbox[0], ln.text))
+            raw.append((ln.bbox[0], ln.text.rstrip() + suffix[k] if k in suffix else ln.text))
             prev_bottom = ln.bbox[3]
         return code_text(raw, left, st.size * 0.5)
     text = inline_text([_segments(ln) for ln in unit.lines], soft)
@@ -208,6 +232,7 @@ def _make_block(
     unit: Unit | None = None,
     cls: Classification | None = None,
     soft: str = ASCII_HYPHEN,
+    callouts: Sequence[Marker] = (),
 ) -> Block:
     if unit is None:
         return Block(
@@ -224,7 +249,7 @@ def _make_block(
         )
     st = style_of(unit.lines)
     marker = cls.list_marker if cls else None
-    text = _unit_text(unit, kind, marker, soft)
+    text = _unit_text(unit, kind, marker, soft, callouts)
     translatable = kind in TRANSLATABLE
     return Block(
         page_no=page_no,
@@ -280,12 +305,20 @@ def extract_page(doc: pymupdf.Document, page_no: int, meta: BookMeta) -> PageBlo
         body_left=min((u.bbox[0] for u in units), default=0.0),
     )
 
+    markers = _page_markers(doc, page_no, raw)
+    code_units = [u for u in units if is_code(style_of(u.lines))]
     content: list[Block] = []
     for u in units:
         cls = classify(u, ctx)
-        content.append(
-            _make_block(page_no, u.bbox, cls.type, unit=u, cls=cls, soft=meta.soft_hyphen)
+        callouts = _callouts_for(u, code_units, markers) if cls.type == BlockType.CODE else []
+        block = _make_block(
+            page_no, u.bbox, cls.type, unit=u, cls=cls, soft=meta.soft_hyphen, callouts=callouts
         )
+        if cls.type == BlockType.LIST_ITEM and cls.list_marker == "":
+            n = _list_number(u, markers)
+            if n is not None:  # text stays unchanged: only the marker becomes "6"
+                block = block.model_copy(update={"list_marker": str(n)})
+        content.append(block)
     for r in figs.regions:
         kind = BlockType.TABLE if r.kind == "table" else BlockType.IMAGE
         content.append(_make_block(page_no, r.bbox, kind))
@@ -315,6 +348,50 @@ def extract_page(doc: pymupdf.Document, page_no: int, meta: BookMeta) -> PageBlo
         continues_on_next_page=_continues(ordered),
         blocks=blocks,
     )
+
+
+def _page_markers(doc: pymupdf.Document, page_no: int, raw: RawPage) -> list[Marker]:
+    """Numbered vector markers of the page. Unknown digits continue from the previous page's
+    markers (which are numbered without looking further back)."""
+    found = detect(raw)
+    previous: list[Marker] = []
+    if needs_previous(found) and page_no > 0:
+        previous = assign_numbers(detect(read_page(doc, page_no - 1)))
+    return assign_numbers(found, previous)
+
+
+def _callouts_for(
+    unit: Unit, code_units: Sequence[Unit], markers: Sequence[Marker]
+) -> list[Marker]:
+    """Code callouts drawn on ``unit``: within its y-range and not left of it. A callout that
+    matches several code units goes to the first one (top to bottom)."""
+
+    def holds(u: Unit, m: Marker) -> bool:
+        return (
+            u.bbox[1] - CALLOUT_TOL <= m.y_center <= u.bbox[3] + CALLOUT_TOL
+            and m.bbox[0] >= u.bbox[0] - CALLOUT_TOL
+        )
+
+    return [
+        m
+        for m in markers
+        if m.kind == "code"
+        and holds(unit, m)
+        and next((u for u in code_units if holds(u, m)), None) is unit
+    ]
+
+
+def _list_number(unit: Unit, markers: Sequence[Marker]) -> int | None:
+    first = unit.lines[0].bbox
+    for m in markers:
+        if (
+            m.kind == "list"
+            and m.bbox[2] <= unit.bbox[0] + 1
+            and unit.bbox[0] - m.bbox[2] <= LIST_MARKER_GAP
+            and v_overlap(m.bbox, first) > 0
+        ):
+            return m.number
+    return None
 
 
 def _continues(ordered: Sequence[Block]) -> bool:

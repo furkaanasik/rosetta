@@ -154,4 +154,4 @@ def test_ddia_numbered_list_with_vector_markers(ddia: tuple[Any, BookMeta]) -> N
 
     assert blocks[0].type == T.CODE
     items = [b for b in blocks if b.type == T.LIST_ITEM]
-    assert len(items) == 5 and all(b.list_marker == "" for b in items)
+    assert [b.list_marker for b in items] == ["1", "2", "3", "4", "5"]

@@ -1,5 +1,5 @@
 {% extends "_base.html.j2" %}
-{% from "_macros.html.j2" import block, list_item, text %}
+{% from "_macros.html.j2" import block, lone_item, text %}
 {% block body_class %}mode-review{% endblock %}
 {% block nav %} · sayfa {{ page_label }} · EN | TR{% endblock %}
 {% block content %}
@@ -10,8 +10,8 @@
 <div class="row full">{{ block(v, v.en) }}</div>
 {% else %}
 <div class="row{% if v.tr is none %} missing{% endif %}" data-aligned="{{ 1 if v.tr is not none and v.tr.aligned else 0 }}">
-<div class="cell en">{% if v.kind == "list_item" %}<ul class="list">{{ list_item(v, v.en) }}</ul>{% else %}{{ block(v, v.en) }}{% endif %}</div>
-<div class="cell tr">{% if v.tr is not none %}{% if v.kind == "list_item" %}<ul class="list">{{ list_item(v, v.tr) }}</ul>{% else %}{{ block(v, v.tr) }}{% endif %}{% else %}<p class="untranslated-note">—</p>{% endif %}</div>
+<div class="cell en">{% if v.kind == "list_item" %}{{ lone_item(v, v.en) }}{% else %}{{ block(v, v.en) }}{% endif %}</div>
+<div class="cell tr">{% if v.tr is not none %}{% if v.kind == "list_item" %}{{ lone_item(v, v.tr) }}{% else %}{{ block(v, v.tr) }}{% endif %}{% else %}<p class="untranslated-note">—</p>{% endif %}</div>
 </div>
 {% endif %}
 {% endfor %}

@@ -38,6 +38,9 @@ pre { font-family: var(--mono); background: var(--code-bg); padding: .8rem 1rem;
   overflow-x: auto; line-height: 1.4; white-space: pre; }
 pre code { background: none; padding: 0; font-size: inherit; }
 ul.list, ol.list { padding-left: 1.6rem; margin: 0 0 .9em; }
+li.callout-item { list-style: none; position: relative; }
+li.callout-item > .callout { position: absolute; left: -1.5rem; }
+.callout { font-family: var(--sans); font-weight: 700; color: var(--accent); }
 figure { margin: 1.5rem 0; }
 figure img { display: block; max-width: 100%; height: auto; margin: 0 auto; }
 figcaption { font-style: italic; color: var(--muted); margin: .4rem 0; }

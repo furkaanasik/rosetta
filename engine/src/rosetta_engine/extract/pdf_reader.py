@@ -67,6 +67,8 @@ class RawDrawing:
     rect: BBox
     filled: bool
     stroked: bool
+    fill: tuple[float, float, float] | None = None  # RGB fill colour, 0..1
+    ops: str = ""  # path command sequence, e.g. "cccc" for a circle of four curves
 
 
 @dataclass(frozen=True)
@@ -109,6 +111,12 @@ def file_hash(path: Path | str) -> str:
 
 def _bbox(v: Any) -> BBox:
     return (float(v[0]), float(v[1]), float(v[2]), float(v[3]))
+
+
+def _rgb(v: Any) -> tuple[float, float, float] | None:
+    if not v or len(v) < 3:
+        return None
+    return (float(v[0]), float(v[1]), float(v[2]))
 
 
 def _contains(outer: BBox, inner: BBox, tol: float = 0.5) -> bool:
@@ -171,7 +179,16 @@ def _read_drawings(page: Any) -> tuple[RawDrawing, ...]:
     out: list[RawDrawing] = []
     for d in page.get_drawings():
         kind = d.get("type") or ""
-        out.append(RawDrawing(rect=_bbox(d["rect"]), filled="f" in kind, stroked="s" in kind))
+        fill = d.get("fill")
+        out.append(
+            RawDrawing(
+                rect=_bbox(d["rect"]),
+                filled="f" in kind,
+                stroked="s" in kind,
+                fill=_rgb(fill),
+                ops="".join(str(item[0]) for item in d.get("items") or ()),
+            )
+        )
     return tuple(out)
 
 

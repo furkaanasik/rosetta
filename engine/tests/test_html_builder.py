@@ -6,7 +6,10 @@ import pymupdf
 from rosetta_engine.models import Block, BlockType, Book, PageBlocks, Translation, text_hash
 from rosetta_engine.render.html_builder import (
     build_page_html,
+    callout_glyph,
+    code_markup,
     inline,
+    marker_number,
     page_filename,
     write_index,
     write_page,
@@ -245,3 +248,78 @@ def test_write_index_lists_pages(tmp_path: Path) -> None:
     assert html.index("p041.debug.html") < html.index("p042.tr.html")
     assert "p042.review.html" in html
     assert page_filename(0, "review") == "p001.review.html"
+
+
+def test_marker_number_and_callout_glyph() -> None:
+    assert marker_number("3") == 3
+    assert marker_number("3.") == 3
+    assert marker_number("(12)") == 12
+    assert marker_number("•") is None
+    assert marker_number("") is None
+    assert callout_glyph("3") == "❸"
+    assert callout_glyph("10") == "❿"
+    assert callout_glyph("3.") is None
+    assert callout_glyph("11") is None
+
+
+def test_list_starting_at_six_gets_ol_start(tmp_path: Path) -> None:
+    items = [mk(i, BlockType.LIST_ITEM, f"Step {n}.", marker=f"{n}.") for i, n in enumerate((6, 7))]
+
+    html = render(page_of(*items), tmp_path)
+
+    assert '<ol class="list" start="6">' in html
+    assert " value=" not in html  # consecutive numbering needs no per-item value
+
+
+def test_list_with_gap_sets_li_values(tmp_path: Path) -> None:
+    items = [
+        mk(i, BlockType.LIST_ITEM, f"Step {n}.", marker=f"{n}.") for i, n in enumerate((1, 2, 5))
+    ]
+
+    html = render(page_of(*items), tmp_path)
+
+    assert '<ol class="list">' in html
+    assert 'value="1"' in html and 'value="2"' in html and 'value="5"' in html
+
+
+def test_callout_list_items_show_glyph_and_keep_value(tmp_path: Path) -> None:
+    items = [
+        mk(i, BlockType.LIST_ITEM, f"Explain {n}.", marker=str(n)) for i, n in enumerate((6, 7))
+    ]
+
+    html = render(page_of(*items), tmp_path)
+
+    assert '<ol class="list" start="6">' in html
+    assert 'class="callout" aria-hidden="true">❻</span>' in html
+    assert 'value="6"' in html and 'value="7"' in html
+    assert "callout-item" in html
+
+
+def test_empty_marker_list_stays_plain_ol(tmp_path: Path) -> None:
+    items = [mk(i, BlockType.LIST_ITEM, f"Item {i}.", marker="") for i in range(2)]
+
+    html = render(page_of(*items), tmp_path)
+
+    assert '<ol class="list">' in html
+    assert "start=" not in html and " value=" not in html
+
+
+def test_code_callouts_wrapped_after_escaping(tmp_path: Path) -> None:
+    code = mk(0, BlockType.CODE, "if a < b: ❸\n  run() ❹")
+
+    html = render(page_of(code), tmp_path)
+
+    assert code_markup("x < y ❸") == 'x &lt; y <span class="callout">❸</span>'
+    assert 'a &lt; b: <span class="callout">❸</span>' in html
+    assert '<span class="callout">❹</span>' in html
+    assert "a < b" not in html
+
+
+def test_review_keeps_list_numbering(tmp_path: Path) -> None:
+    item = mk(0, BlockType.LIST_ITEM, "Follow edges.", marker="6")
+
+    html = render(page_of(item), tmp_path, [tr(item, "Kenarları izle.")], mode="review")
+
+    assert html.count('<ol class="list" start="6">') == 2  # EN and TR cells
+    assert html.count('value="6"') == 2
+    assert html.count(">❻</span>") == 2

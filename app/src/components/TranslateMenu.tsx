@@ -17,6 +17,8 @@ export interface TranslateActions {
   onTranslateAll: (budget: number | null) => void;
   onAnalyze: () => void;
   onExport: (mode: ExportMode) => void;
+  /** Pre-filled budget for range / whole-book jobs (Ayarlar → Toplu iş bütçesi). */
+  defaultBudget?: number | null;
 }
 
 export type RangeKind = "range" | "all";
@@ -133,7 +135,7 @@ export function TranslateMenu(
 
 function RangeForm(p: TranslateActions & { kind: RangeKind; seed: string; onDone: () => void }) {
   const [range, setRange] = useState(p.seed);
-  const [budget, setBudget] = useState("");
+  const [budget, setBudget] = useState(p.defaultBudget != null ? String(p.defaultBudget) : "");
   const budgetValue = budget.trim() ? Number(budget.replace(",", ".")) : null;
   const badBudget = budgetValue !== null && !(budgetValue > 0);
   const submit = (e: FormEvent) => {

@@ -4,6 +4,8 @@ import {
   type ApiErrorKind,
   type BookInfo,
   type BookProfile,
+  type ClaudeCandidate,
+  type Diagnostics,
   type EngineInfo,
   type Estimate,
   type EstimateHint,
@@ -23,6 +25,8 @@ import {
   type PagesHtml,
   type Rating,
   type ReviewCard,
+  type SettingsPatch,
+  type SettingsView,
   type TermInfo,
   type TocEntry,
   type TranslateEstimateRequest,
@@ -38,6 +42,7 @@ type Query = Record<string, string | number | boolean | undefined>;
 
 const KNOWN_KINDS: ReadonlySet<string> = new Set<ApiErrorKind>([
   "conflict",
+  "busy",
   "usage_limit",
   "auth",
   "budget",
@@ -77,7 +82,7 @@ export class HttpEngineApi implements EngineApi {
         headers: { Authorization: `Bearer ${this.token}` },
       });
     } catch (e) {
-      throw new EngineError("unavailable", `Motora ulaşılamıyor: ${String(e)}`);
+      throw new EngineError("offline", `Motor bağlantısı yok: ${String(e)}`);
     }
     if (!res.ok) return null;
     return res.arrayBuffer();
@@ -95,7 +100,7 @@ export class HttpEngineApi implements EngineApi {
         body: body !== undefined ? JSON.stringify(body) : undefined,
       });
     } catch (e) {
-      throw new EngineError("unavailable", `Motora ulaşılamıyor: ${String(e)}`);
+      throw new EngineError("offline", `Motor bağlantısı yok: ${String(e)}`);
     }
     if (res.status === 204) return undefined as T;
     const text = await res.text();
@@ -137,7 +142,7 @@ export class HttpEngineApi implements EngineApi {
         headers: { Authorization: `Bearer ${this.token}` },
       });
     } catch (e) {
-      throw new EngineError("unavailable", `Motora ulaşılamıyor: ${String(e)}`);
+      throw new EngineError("offline", `Motor bağlantısı yok: ${String(e)}`);
     }
     if (!res.ok) throw new EngineError("not_found", `${what} yüklenemedi`, res.status);
     return res.blob();
@@ -275,6 +280,20 @@ export class HttpEngineApi implements EngineApi {
 
   usage(bookId?: number) {
     return this.call<UsageTotals>("GET", "/api/usage", undefined, { book_id: bookId });
+  }
+
+  getSettings() {
+    return this.call<SettingsView>("GET", "/api/settings");
+  }
+  putSettings(patch: SettingsPatch) {
+    return this.call<SettingsView>("PUT", "/api/settings", { values: patch });
+  }
+  diagnostics() {
+    return this.call<Diagnostics>("GET", "/api/diagnostics");
+  }
+  async detectClaude() {
+    const r = await this.call<{ candidates: ClaudeCandidate[] }>("GET", "/api/diagnostics/claude");
+    return r.candidates;
   }
 }
 

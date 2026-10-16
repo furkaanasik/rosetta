@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from rosetta_engine import __version__, config
 from rosetta_engine.api import ai, books, errors, learn
+from rosetta_engine.api import settings as settings_api
 from rosetta_engine.api.confirm import ConfirmStore
 from rosetta_engine.api.deps import require_token
 from rosetta_engine.api.state import CompleteFn, EngineState, TranslatorFactory
@@ -54,7 +55,7 @@ def create_app(
     app.state.token = token
     app.state.engine = state
     errors.install(app)
-    for module in (books, ai, learn):
+    for module in (books, ai, learn, settings_api):
         app.include_router(module.router)
     app.add_middleware(
         CORSMiddleware,

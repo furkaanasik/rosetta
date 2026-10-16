@@ -175,7 +175,10 @@ Ayrıntı: [docs/faz8-saglayicilar.md](docs/faz8-saglayicilar.md).
 | Veri (DB, HTML/PDF çıktıları, sözlük) | `~/.local/share/rosetta/` (`rosetta.db`, `out/<hash>/`, `dictionary.db`) | `ROSETTA_DATA_DIR` |
 | Ayarlar | `~/.config/rosetta/config.toml` | `ROSETTA_CONFIG_DIR` |
 
-`config.toml` (gösterilen değerler varsayılanlardır; dosya olmadan da çalışır):
+`config.toml` (gösterilen değerler varsayılanlardır; dosya olmadan da çalışır). Çoğu ayar uygulamadaki
+**Ayarlar** ekranından (dişli simgesi ya da `Ctrl+,`) da değiştirilebilir; ekran dosyadaki yorumları ve
+`[pricing.*]` tablolarını korur. Ayarlar → **Motor durumu** bir şey çalışmadığında nedenini gösterir
+(claude bulunamadı, sözlük kurulmamış, Chromium yok…); bu kontroller AI'a istek göndermez.
 
 ```toml
 default_lang = "tr"
@@ -185,6 +188,7 @@ explain_model = "haiku"          # "Bunu açıkla"
 batch_max_pages = 5              # bir çağrıda en fazla sayfa
 batch_max_input_tokens = 6000    # bir çağrıda en fazla tahmini input token
 claude_timeout_s = 240
+# claude_path = "/home/ben/.local/bin/claude"  # boş: PATH + bilinen kurulum yerleri (otomatik)
 claude_effort = "medium"         # claude --effort
 # claude_max_thinking_tokens = 0 # 0 = düşünme kapalı (MAX_THINKING_TOKENS=0)
 claude_max_budget_usd = 0.25     # çağrı başı sınır (claude --max-budget-usd)

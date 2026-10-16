@@ -9,15 +9,20 @@ const BOOK = process.env.E2E_BOOK ?? "";
 const SHOTS = "e2e/screenshots";
 const PAGES = [25, 30, 59, 94, 115];
 
-const sheet = (p: Page, n: number, kind: "orijinal" | "Türkçe") => p.getByRole("figure", { name: `Sayfa ${n} (${kind})` });
+const sheet = (p: Page, n: number, kind: "orijinal" | "Türkçe") => p.getByRole("figure", { name: `Sayfa ${n} (${kind})`, exact: true });
+
+/** All book sheets of a page (the page itself and its "devam" continuations). */
+const bookSheets = (p: Page, n: number) => p.getByRole("figure", { name: new RegExp(`^Sayfa ${n} \\(Türkçe\\)`) });
 
 /** Figure/table crops are fetched with the bearer token (blob URLs): wait until all are painted. */
 async function figuresLoaded(p: Page, n: number) {
-  const html = sheet(p, n, "Türkçe").locator(".engine-html");
+  const html = bookSheets(p, n).locator(".engine-html");
   await expect
     .poll(() =>
-      html.evaluate((root) =>
-        Array.from(root.querySelectorAll<HTMLImageElement>("img")).every((img) => img.complete && img.naturalWidth > 0),
+      html.evaluateAll((roots) =>
+        roots.every((root) =>
+          Array.from(root.querySelectorAll<HTMLImageElement>("img")).every((img) => img.complete && img.naturalWidth > 0),
+        ),
       ),
     )
     .toBe(true);
@@ -78,6 +83,13 @@ for (const [scheme, w, h] of [
       await expect(sheet(page, n, "Türkçe").locator(".engine-html")).toContainText(/[çğıöşü]/);
       await figuresLoaded(page, n);
       await page.screenshot({ path: `${SHOTS}/v2/ddia-${tag}-p${n}-turkce.png` });
+      // Book pages: text that doesn't fit continues on a "devam" sheet of the same size.
+      const cont = page.getByRole("figure", { name: `Sayfa ${n} (Türkçe), devam 1`, exact: true });
+      if (await cont.count()) {
+        await cont.evaluate((el) => el.scrollIntoView({ block: "start" }));
+        await page.waitForTimeout(300);
+        await page.screenshot({ path: `${SHOTS}/v2/ddia-${tag}-p${n}-turkce-devam.png` });
+      }
     }
 
     // Nothing above may have cost anything.

@@ -28,7 +28,13 @@ from rosetta_engine.models import BookProfile, TranslationPlan
 from rosetta_engine.profile.profiler import ProfilePlan, Profiler
 from rosetta_engine.store.repo import JobRow
 from rosetta_engine.translate.base import Translator
-from rosetta_engine.translate.providers import UnknownProviderError, supports_profile
+from rosetta_engine.translate.claude_cli import unavailable_message
+from rosetta_engine.translate.claude_locate import resolve_claude
+from rosetta_engine.translate.providers import (
+    UnknownProviderError,
+    make_translator,
+    supports_profile,
+)
 from rosetta_engine.translate.service import PageTranslationService
 
 log = logging.getLogger(__name__)
@@ -84,6 +90,7 @@ def _plan_estimate(
     warnings: list[str] | None = None,
 ) -> dict[str, Any]:
     op: Operation = "translate" if operation == "translate" else "job"
+    warnings = [*(warnings or []), *provider_warnings(eng, t.name)]
     return estimate(
         token,
         op,
@@ -97,8 +104,16 @@ def _plan_estimate(
         total_blocks=plan.total_blocks,
         cached_blocks=plan.cached_blocks,
         supports_profile=supports_profile(t),
-        warnings=warnings,
+        warnings=warnings or None,
     )
+
+
+def provider_warnings(eng: EngineState, provider: str) -> list[str]:
+    """Problems the user can fix before confirming (shown in the cost dialog). No AI."""
+    real = eng.translator_factory is make_translator
+    if real and provider == "claude-cli" and resolve_claude(eng.settings.claude_path) is None:
+        return [unavailable_message(eng.settings.claude_path)]
+    return []
 
 
 # --- single translation -----------------------------------------------------------------------

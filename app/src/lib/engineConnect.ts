@@ -103,3 +103,11 @@ export async function onEngineError(cb: (message: string) => void): Promise<() =
   const { listen } = await import("@tauri-apps/api/event");
   return listen<string>("engine-error", (e) => cb(e.payload));
 }
+
+/** Opens one of Rosetta's own data/config folders in the file manager (Tauri only). */
+export async function openFolder(path: string): Promise<boolean> {
+  if (!isTauri()) return false;
+  const { invoke } = await import("@tauri-apps/api/core");
+  await invoke("open_folder", { path });
+  return true;
+}

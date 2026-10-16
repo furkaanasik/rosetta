@@ -78,6 +78,56 @@ fn initial_pdf(state: State<'_, OpenState>) -> Option<String> {
     state.pending.lock().ok().and_then(|mut p| p.take())
 }
 
+/// Rosetta's own folders that "Klasörü aç" may open: data and config dirs (XDG or overridden by
+/// ROSETTA_DATA_DIR / ROSETTA_CONFIG_DIR), and anything below them. Nothing else.
+pub fn allowed_folder_roots() -> Vec<std::path::PathBuf> {
+    use std::path::PathBuf;
+    let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
+    let xdg = |var: &str, fallback: &str| {
+        std::env::var_os(var)
+            .map(PathBuf::from)
+            .filter(|p| p.is_absolute())
+            .unwrap_or_else(|| home.join(fallback))
+    };
+    let mut roots = vec![
+        xdg("XDG_DATA_HOME", ".local/share").join("rosetta"),
+        xdg("XDG_CONFIG_HOME", ".config").join("rosetta"),
+    ];
+    for var in ["ROSETTA_DATA_DIR", "ROSETTA_CONFIG_DIR"] {
+        if let Some(p) = std::env::var_os(var).map(PathBuf::from).filter(|p| p.is_absolute()) {
+            roots.push(p);
+        }
+    }
+    roots
+}
+
+/// True when `path` (canonicalised) is an existing directory inside one of `roots`.
+pub fn folder_allowed(path: &std::path::Path, roots: &[std::path::PathBuf]) -> bool {
+    let Ok(real) = path.canonicalize() else { return false };
+    real.is_dir()
+        && roots
+            .iter()
+            .filter_map(|r| r.canonicalize().ok())
+            .any(|root| real.starts_with(root))
+}
+
+/// Opens one of Rosetta's own folders in the file manager (xdg-open).
+#[tauri::command]
+fn open_folder(path: String) -> Result<(), String> {
+    let p = std::path::Path::new(&path);
+    if !folder_allowed(p, &allowed_folder_roots()) {
+        return Err("Bu klasör açılamaz".into());
+    }
+    std::process::Command::new("xdg-open")
+        .arg(p)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| format!("Dosya yöneticisi açılamadı: {e}"))
+}
+
 #[derive(Default)]
 struct EngineState {
     info: Mutex<Option<EngineInfo>>,
@@ -259,7 +309,7 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .manage(EngineState::default())
         .manage(OpenState { pending: Mutex::new(initial) })
-        .invoke_handler(tauri::generate_handler![engine_info, initial_pdf])
+        .invoke_handler(tauri::generate_handler![engine_info, initial_pdf, open_folder])
         .setup(|app| {
             start_engine(app.handle());
             Ok(())
@@ -335,5 +385,22 @@ mod tests {
         assert_eq!(t.len(), 64);
         assert!(t.chars().all(|c| c.is_ascii_hexdigit()));
         assert_ne!(t, random_token());
+    }
+
+    #[test]
+    fn open_folder_only_inside_rosetta_roots() {
+        let base = std::env::temp_dir().join(format!("rosetta-roots-{}", std::process::id()));
+        let root = base.join("data/rosetta");
+        let inside = root.join("out");
+        let outside = base.join("elsewhere");
+        std::fs::create_dir_all(&inside).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        let roots = vec![root.clone()];
+        assert!(folder_allowed(&root, &roots));
+        assert!(folder_allowed(&inside, &roots));
+        assert!(!folder_allowed(&outside, &roots));
+        assert!(!folder_allowed(&inside.join("../../.."), &roots));
+        assert!(!folder_allowed(&base.join("missing"), &roots));
+        std::fs::remove_dir_all(&base).unwrap();
     }
 }

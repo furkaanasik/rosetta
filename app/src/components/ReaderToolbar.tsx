@@ -7,6 +7,7 @@ import {
   Columns,
   Command,
   FileText,
+  GearSix,
   GraduationCap,
   MagnifyingGlassMinus,
   MagnifyingGlassPlus,
@@ -46,6 +47,8 @@ interface Props {
   onFit: () => void;
   onTogglePanel: () => void;
   onPalette: () => void;
+  /** Opens Ayarlar (Ctrl ,). */
+  onSettings?: () => void;
   /** Quiet status (spend / engine state) shown at the end of the bar. */
   status?: ReactNode;
 }
@@ -141,6 +144,11 @@ export const ReaderToolbar = forwardRef<HTMLInputElement, Props>(function Reader
         <IconButton label="Komut paleti" title="Komutlar (Ctrl K)" onClick={p.onPalette}>
           <Command />
         </IconButton>
+        {p.onSettings && (
+          <IconButton label="Ayarlar" title="Ayarlar (Ctrl ,)" onClick={p.onSettings}>
+            <GearSix />
+          </IconButton>
+        )}
         <IconButton label="Yan panel" title="Yan panel (\)" aria-pressed={p.panelOpen} onClick={p.onTogglePanel}>
           <SidebarSimple />
         </IconButton>

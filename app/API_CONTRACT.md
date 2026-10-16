@@ -42,7 +42,9 @@ ROSETTA_SERVE_TOKEN=<64-hex> rosetta serve --port 0      # stdin: a pipe kept op
 | `usage_limit` | 429 | Claude usage limit (job → paused) |
 | `budget` | 402 | per-call budget cap or job budget reached |
 | `auth` | 401* | `claude` not logged in (*kind distinguishes from `unauthorized`) |
-| `unavailable` | 503 | `claude` missing / provider down / engine busy |
+| `busy` | 409 | another AI operation or batch job holds the single AI slot (message names the job; a paused/cancelled job still finishes its current batch) — retry later, show "İşleri aç" |
+| `unavailable` | 503 | `claude` CLI not found (message says so; "Ayarlar" action), provider down, Chromium missing |
+| *(client only)* `offline` | – | the engine itself can't be reached (network error) — "Motor bağlantısı yok" |
 | `internal` | 500 | anything else |
 
 ## Two-step AI operations (rules 1 and 2)
@@ -183,3 +185,15 @@ The app distinguishes the two estimate responses by the presence of `explanation
 | Method | Path | Query | Response |
 |---|---|---|---|
 | GET | `/api/usage` | `?book_id=` | `{calls, input_tokens, output_tokens, cost_usd}` (all recorded calls; list-price equivalent) |
+
+### Settings & diagnostics (no AI)
+| Method | Path | Body | Response |
+|---|---|---|---|
+| GET | `/api/settings` | – | `SettingsView {values, defaults, from_file: string[], editable: string[], config_path}` — `values`/`defaults` hold only the editable keys |
+| PUT | `/api/settings` | `{values: {key: value \| null}}` | `SettingsView`; validated, written atomically to `config.toml` (comments, tables and unknown keys kept; `null` removes the key → default) and applied to the running engine. Non-editable keys (e.g. `pricing`) → 400. Secrets are never stored (DeepL key stays in the env var named by `deepl_auth_key_env`). |
+| GET | `/api/diagnostics` | – | `Diagnostics {engine, paths, dictionary, claude {configured, path, source: settings\|path\|fallback\|missing, version}, chromium, deepl {env, key_set}, ollama {reachable, models?, has_model?, note?}}`; runs `claude --version` (5 s timeout) and probes Ollama only on localhost (1 s) |
+| GET | `/api/diagnostics/claude` | – | `{candidates: [{path, version}]}` for the "Bul" button (PATH first, then known install dirs) |
+
+Editable keys: `default_lang, provider, model, explain_model, claude_path, claude_effort, claude_max_thinking_tokens, claude_max_budget_usd, claude_timeout_s, job_default_budget_usd, batch_max_pages, deepl_auth_key_env, ollama_url, ollama_model`.
+
+Estimate responses add a warning when the claude CLI can't be found, so the cost dialog shows the problem before **Onayla**.

@@ -29,6 +29,7 @@ ErrorKind = Literal[
     "not_found",
     "expired_token",
     "conflict",
+    "busy",
     "invalid",
     "usage_limit",
     "budget",
@@ -43,6 +44,7 @@ STATUS: dict[ErrorKind, int] = {
     "not_found": 404,
     "expired_token": 409,
     "conflict": 409,
+    "busy": 409,  # another AI operation / job holds the single AI slot; retry later
     "invalid": 422,
     "usage_limit": 429,
     "budget": 402,

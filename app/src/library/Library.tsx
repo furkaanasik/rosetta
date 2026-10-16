@@ -1,4 +1,4 @@
-import { FilePlus, Moon, Plug, Sun, SunHorizon, WarningCircle } from "@phosphor-icons/react";
+import { FilePlus, GearSix, Moon, Plug, Sun, SunHorizon, WarningCircle } from "@phosphor-icons/react";
 import { useCallback, useEffect, useState } from "react";
 import type { EngineApi } from "../api/engine";
 import type { LibraryBook } from "../api/types";
@@ -18,13 +18,15 @@ interface Props {
   onTheme: () => void;
   onPick: () => void;
   onOpenPath: (path: string) => void;
+  /** Opens Ayarlar (Ctrl ,). */
+  onSettings?: () => void;
 }
 
 const THEME_ICON = { system: <SunHorizon />, light: <Sun />, dark: <Moon /> };
 const THEME_LABEL = { system: "Tema: sistem", light: "Tema: açık", dark: "Tema: koyu" };
 
 /** Home screen: recently opened books (cover, progress, translated share) and "PDF aç". */
-export function Library({ api, mock, engineError, refreshKey, theme, onTheme, onPick, onOpenPath }: Props) {
+export function Library({ api, mock, engineError, refreshKey, theme, onTheme, onPick, onOpenPath, onSettings }: Props) {
   const [books, setBooks] = useState<LibraryBook[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [drop, setDrop] = useState<DropState>("idle");
@@ -85,6 +87,11 @@ export function Library({ api, mock, engineError, refreshKey, theme, onTheme, on
         <IconButton label={THEME_LABEL[theme]} onClick={onTheme}>
           {THEME_ICON[theme]}
         </IconButton>
+        {onSettings && (
+          <IconButton label="Ayarlar" title="Ayarlar (Ctrl ,)" onClick={onSettings}>
+            <GearSix />
+          </IconButton>
+        )}
       </header>
 
       <main className="library__main">

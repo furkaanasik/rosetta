@@ -381,7 +381,7 @@ def test_estimate_profile_adds_glossary_tokens(book_pdf: Path, tmp_path: Path) -
 def test_missing_claude_binary_fails_before_planning(
     book_pdf: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(cli.shutil, "which", lambda _: None)
+    monkeypatch.setattr("rosetta_engine.translate.claude_locate.shutil.which", lambda _: None)
 
     result = runner.invoke(
         cli.app, ["translate", str(book_pdf), "--pages", "1", "--provider", "claude-cli", "--yes"]

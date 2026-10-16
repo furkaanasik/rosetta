@@ -40,14 +40,14 @@ describe("HttpEngineApi", () => {
     await expect(api.getBook(1)).rejects.toMatchObject({ kind: "conflict", status: 409 });
   });
 
-  it("reports network failures as unavailable", async () => {
+  it("reports network failures as offline (engine down)", async () => {
     const fn = (async () => {
       throw new TypeError("connection refused");
     }) as typeof fetch;
     const api = new HttpEngineApi({ baseUrl: "http://x", token: "t" }, fn);
     const err = await api.health().catch((e: unknown) => e);
     expect(err).toBeInstanceOf(EngineError);
-    expect((err as EngineError).kind).toBe("unavailable");
+    expect((err as EngineError).kind).toBe("offline");
   });
 
   it("fetches assets with the bearer header, never a token in the URL", async () => {

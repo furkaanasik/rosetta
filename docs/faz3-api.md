@@ -88,13 +88,15 @@ yerel dosyayı okuyamadığı için PDF.js bunu kullanır.
   ve her kullanım kitabın kilidi altındadır.
 - Toplu işler arka plan iş parçacığında, kendi bağlantısıyla çalışır; ilerleme her batch sonrası
   `jobs` tablosuna yazılır. Duraklatma DB bayrağıyla istenir (CLI ile aynı). Aynı anda tek toplu iş
-  çalışır; ikincisi `503 unavailable` alır — **belirteç harcanmadan ve iş satırı oluşmadan**
+  çalışır; ikincisi `409 busy` alır — **belirteç harcanmadan ve iş satırı oluşmadan**
   (yuva önce ayrılır), yani aynı belirteçle sonra tekrar denenebilir.
 - İş, `running` durumuna atomik bir `UPDATE … WHERE status IN (…) AND pause_requested = 0` ile
   geçer: planlama sırasında gelen iptal ya da duraklatma işi hiç başlatmaz (sağlayıcı çağrılmaz);
   iptal edilmiş bir iş hiçbir yolda başka bir duruma yazılmaz.
 - **AI tek seferde bir:** çeviri, profil analizi ve açıklama süreç genelinde bir kilit alır; bir
-  toplu iş çalıştığı sürece kilidi tutar. Meşgulken `503 unavailable` (belirteç harcanmaz).
+  toplu iş çalıştığı sürece kilidi tutar. Meşgulken `409 busy` (belirteç harcanmaz); mesaj işin
+  numarasını söyler. Duraklatılan ya da iptal edilen bir iş **mevcut partisini bitirene kadar**
+  kilidi tutar (ödenmiş sonuç kaybolmasın diye çağrı kesilmez); o arada çeviri `busy` alır.
   Ayrıca her batch, sağlayıcıya gitmeden hemen önce cache'e yeniden bakar.
 - Motor yeniden başlarsa kitaplar DB'deki dosya yolundan tembel olarak yeniden açılır; o yolda
   artık başka bir dosya (farklı hash) varsa `409 conflict` döner (kimlikler karışmaz).
@@ -102,11 +104,28 @@ yerel dosyayı okuyamadığı için PDF.js bunu kullanır.
   kilit dışında, geçici dosyaya yapılır ve `os.replace` ile yerine konur. Çıktı yolu herhangi bir
   kitabın kaynak PDF'i olamaz (`400`).
 
+## Ayarlar ve tanılama (AI'sız)
+
+- `GET /api/settings` / `PUT /api/settings {values}`: Ayarlar ekranı. Yalnızca beyaz listedeki üst düzey
+  anahtarlar değiştirilebilir; `config.toml` satır satır güncellenir (yorumlar, `[pricing.*]` tabloları ve
+  bilinmeyen anahtarlar korunur), bütün dosya doğrulanır, sonra geçici dosya + `os.replace` ile yazılır ve
+  çalışan motora hemen uygulanır. `null` → anahtar silinir (varsayılan).
+- `GET /api/diagnostics`: motor sürümü, klasörler, DB boyutu, sözlük, claude yolu + `claude --version`,
+  Chromium, DeepL anahtar değişkeni tanımlı mı, Ollama (yalnızca localhost, 1 sn). `GET /api/diagnostics/claude`:
+  "Bul" düğmesi için bulunan kurulumlar.
+- **claude bulma sırası:** `claude_path` ayarı (geçersizse başka yere bakılmaz) → `PATH` → bilinen kurulum
+  yerleri (`~/.local/bin`, `~/.claude/local`, `~/.local/share/mise/installs/claude/*` (en yeni), mise shim,
+  `~/.npm-global/bin`, `~/.bun/bin`, `/usr/local/bin`, `/usr/bin`). Masaüstünden açılan uygulamanın PATH'i
+  kabuktakinden kısa olabildiği için.
+- Paketli motorda (PyInstaller + AppImage) `claude` alt sürecine kullanıcının kendi `LD_LIBRARY_PATH`'i verilir
+  (`LD_LIBRARY_PATH_ORIG`; `_MEI…` ve `$APPDIR` kütüphaneleri çıkarılır).
+
 ## Hata biçimi
 
 `{"error": {"kind", "message"}}` — `bad_request` 400, `unauthorized` 401, `not_found` 404,
 `expired_token` 409, `conflict` 409 (kitap dosyası değişmiş), `invalid` 422, `usage_limit` 429, `budget` 402, `auth` 401,
-`unavailable` 503 (claude yok, sağlayıcı hatası, Chromium yok, meşgul), `internal` 500.
+`busy` 409 (başka bir AI işlemi/toplu iş sürüyor), `unavailable` 503 (claude CLI bulunamadı, sağlayıcı
+hatası, Chromium yok), `internal` 500. Uygulama ayrıca motora hiç ulaşamadığında `offline` gösterir.
 
 ## Testler
 

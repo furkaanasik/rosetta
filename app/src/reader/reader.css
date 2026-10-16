@@ -5,6 +5,11 @@
  */
 
 /* ---------- reading area ---------- */
+.rs-canvas-wrap {
+  position: relative;
+  height: 100%;
+  min-height: 0;
+}
 .rs-canvas {
   position: relative;
   height: 100%;
@@ -258,16 +263,20 @@
   border-radius: 6px;
   background: var(--code-bg, #f1ece2);
 }
-/* Code never overflows the sheet: wrap long lines, keep indentation. */
+/* Code never overflows the sheet and is never shrunk: long lines scroll inside the block, so
+   line-end callouts (❶) stay attached to their line. */
 .rs-html pre {
   margin: 0 0 1em;
   padding: 0.8em 1em;
   max-width: 100%;
   box-sizing: border-box;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
+  white-space: pre;
+  overflow-x: auto;
+  overflow-wrap: normal;
   word-break: normal;
-  line-height: 1.45;
+  scrollbar-width: thin;
+  /* Close to the book's own code leading (≈1.2), so code takes the room it takes in print. */
+  line-height: 1.28;
   font-size: 0.86em;
   background: var(--code-bg, #f1ece2);
   border-radius: 6px;
@@ -407,4 +416,237 @@
   .rs-html .rs-hl {
     transition: none;
   }
+}
+
+/* ---------- reading progress + PDF tone (overlays of the reading area) ---------- */
+.rs-progress {
+  position: absolute;
+  inset: 0 0 auto;
+  height: 2px;
+  z-index: 3;
+  pointer-events: none;
+  background: color-mix(in srgb, var(--ink, #1e1b16) 6%, transparent);
+}
+.rs-progress__bar {
+  height: 100%;
+  background: var(--accent, #b4532a);
+  opacity: 0.7;
+  transform-origin: 0 50%;
+  transition-property: transform;
+  transition-duration: 240ms;
+  transition-timing-function: var(--ease, cubic-bezier(0.32, 0.72, 0, 1));
+}
+/* The tone switch only matters (and only shows) in the dark theme. */
+.rs-tone {
+  position: absolute;
+  left: 16px;
+  bottom: 16px;
+  z-index: 3;
+  display: none;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--canvas, #141311) 82%, transparent);
+  box-shadow: 0 0 0 1px var(--sheet-edge, rgba(255, 255, 255, 0.07)), 0 6px 18px -8px rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(8px);
+}
+.rs-tone__btn {
+  min-height: 28px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--ink-2, #a79f92);
+  font: 500 12px/1 var(--font-ui, "Geist Variable", system-ui, sans-serif);
+  cursor: pointer;
+  transition-property: background-color, color;
+  transition-duration: 150ms;
+}
+.rs-tone__btn:hover {
+  color: var(--ink, #ece7dd);
+}
+.rs-tone__btn[aria-pressed="true"] {
+  background: color-mix(in srgb, var(--ink, #ece7dd) 10%, transparent);
+  color: var(--ink, #ece7dd);
+}
+:root[data-theme="dark"] .rs-tone {
+  display: flex;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .rs-tone {
+    display: flex;
+  }
+}
+/* Dark theme: the white PDF page no longer glares. "soft" inverts luminance but keeps hues
+   (figures stay readable), "dim" just lowers brightness, "original" leaves it untouched. */
+:root[data-theme="dark"] [data-pdf-tone="soft"] :is(.rs-pdf-canvas, .rs-html img) {
+  filter: invert(0.88) hue-rotate(180deg) saturate(0.85) contrast(0.92);
+}
+:root[data-theme="dark"] [data-pdf-tone="dim"] :is(.rs-pdf-canvas, .rs-html img) {
+  filter: brightness(0.78) contrast(0.96) sepia(0.06);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) [data-pdf-tone="soft"] :is(.rs-pdf-canvas, .rs-html img) {
+    filter: invert(0.88) hue-rotate(180deg) saturate(0.85) contrast(0.92);
+  }
+  :root:not([data-theme="light"]) [data-pdf-tone="dim"] :is(.rs-pdf-canvas, .rs-html img) {
+    filter: brightness(0.78) contrast(0.96) sepia(0.06);
+  }
+}
+
+/* ---------- book pages (Türkçe / Öğrenme) ---------- */
+.rs-book {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 28px;
+}
+/* Measures the full page once per layout; holds nothing the rest of the time. */
+.rs-measure {
+  position: absolute;
+  top: 0;
+  left: 0;
+  visibility: hidden;
+  pointer-events: none;
+  contain: layout style;
+}
+.rs-sheet--book {
+  overflow: visible;
+  /* Paper: a faint grain and a soft inner vignette, tasteful in both themes. */
+  background-color: var(--sheet, #fffdf8);
+  background-image:
+    radial-gradient(120% 90% at 50% 40%, transparent 62%, color-mix(in srgb, var(--ink, #1e1b16) 4%, transparent)),
+    url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 .055 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
+  box-shadow:
+    0 0 0 1px var(--sheet-edge, rgba(60, 45, 20, 0.1)),
+    0 1px 1px rgba(40, 30, 15, 0.04),
+    0 2px 4px rgba(40, 30, 15, 0.04),
+    0 12px 28px -12px rgba(40, 30, 15, 0.18);
+}
+:root[data-theme="dark"] .rs-sheet--book {
+  box-shadow: 0 0 0 1px var(--sheet-edge), 0 14px 32px -14px rgba(0, 0, 0, 0.6);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .rs-sheet--book {
+    box-shadow: 0 0 0 1px var(--sheet-edge), 0 14px 32px -14px rgba(0, 0, 0, 0.6);
+  }
+}
+.rs-running-head,
+.rs-folio-in {
+  position: absolute;
+  left: 0;
+  right: 0;
+  padding: 0 12%;
+  text-align: center;
+  font-family: var(--font-reading, "Literata Variable", "Literata", Georgia, serif);
+  font-size: calc(var(--scale, 1) * 8.5pt);
+  line-height: 1;
+  color: var(--ink-3, #8f8778);
+  user-select: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Uppercase (not font small caps: they lose ş/ğ/İ in Literata) set small and tracked. */
+.rs-running-head {
+  top: calc(var(--pad-top, 48px) * 0.42);
+  font-size: calc(var(--scale, 1) * 7pt);
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+}
+.rs-folio-in {
+  bottom: calc(var(--pad-bottom, 48px) * 0.38);
+  font-variant-numeric: oldstyle-nums proportional-nums;
+  letter-spacing: 0.04em;
+}
+
+/* Book typography: justified, hyphenated (lang="tr"), indented paragraphs instead of gaps. */
+.rs-sheet--book .rs-html {
+  line-height: 1.5;
+  text-align: justify;
+  text-justify: inter-word;
+  hyphens: auto;
+  -webkit-hyphens: auto;
+  hyphenate-limit-chars: 6 3 2;
+  font-variant-numeric: oldstyle-nums proportional-nums;
+  font-kerning: normal;
+  font-feature-settings: "kern", "liga", "calt";
+  orphans: 2;
+  widows: 2;
+}
+.rs-sheet--book .rs-html :where(p, li, figcaption) {
+  text-wrap: wrap;
+}
+.rs-sheet--book .rs-html p.b-paragraph {
+  margin: 0;
+}
+.rs-sheet--book .rs-html p.b-paragraph:not(.aside) + p.b-paragraph:not(.aside) {
+  text-indent: 1.5em;
+}
+/* A paragraph continued from the previous sheet starts flush; a cut one keeps its last line full. */
+.rs-sheet--book .rs-html p.rs-cont {
+  text-indent: 0 !important;
+}
+.rs-sheet--book .rs-html .rs-cut {
+  text-align-last: justify;
+}
+/* Space around anything that isn't a running paragraph. */
+.rs-sheet--book .rs-html :where(pre, figure, ul, ol, aside, .aside, h1, h2, h3, h4, h5, h6) + p.b-paragraph,
+.rs-sheet--book .rs-html p.b-paragraph + :where(pre, figure, ul, ol, aside, .aside, h2, h3, h4, h5, h6) {
+  margin-top: 0.9em;
+}
+.rs-sheet--book .rs-html :where(h1, h2, h3, h4, h5, h6, pre, code, li, figcaption, .rs-epigraph, .aside) {
+  text-align: left;
+  hyphens: manual;
+  -webkit-hyphens: manual;
+}
+.rs-sheet--book .rs-html :where(h1, h2, h3, h4, h5, h6) {
+  font-variant-numeric: lining-nums proportional-nums;
+}
+.rs-sheet--book .rs-html .rs-epigraph.rs-attribution {
+  text-align: right;
+}
+/* "BÖLÜM 1": small capitals in the reading face. */
+.rs-sheet--book .rs-html h1 .h-label {
+  font-family: var(--font-reading, "Literata Variable", "Literata", Georgia, serif);
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+  font-size: calc(var(--scale, 1) * 8pt);
+}
+/* Code on book pages uses a condensed mono close to print (bundled, offline). */
+.rs-sheet--book .rs-html :is(pre, code) {
+  font-family: "Ubuntu Mono", var(--font-mono, "Geist Mono Variable", ui-monospace, monospace);
+}
+.rs-sheet--book .rs-html pre {
+  line-height: 1.22;
+}
+/* A code block wider than the page scrolls; a soft fade at the right edge says so. */
+.rs-html pre.rs-overflow {
+  mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
+}
+.rs-html pre.rs-overflow:hover,
+.rs-html pre.rs-overflow:focus-within {
+  mask-image: none;
+}
+/* Code and lists keep tabular, lining figures. */
+.rs-sheet--book .rs-html :where(pre, code, li::marker) {
+  font-variant-numeric: lining-nums tabular-nums;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rs-progress__bar {
+    transition: none;
+  }
+}
+
+/* Öğrenme: English study text reads better ragged-right (no rivers, glosses stay put). */
+.rs-sheet--book .rs-html.mode-learn {
+  text-align: left;
+  hyphens: manual;
+  -webkit-hyphens: manual;
+}
+.rs-sheet--book .rs-html.mode-learn .rs-cut {
+  text-align-last: auto;
 }

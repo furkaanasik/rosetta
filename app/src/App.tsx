@@ -9,6 +9,7 @@ import {
   FilePdf,
   FileText,
   FolderOpen,
+  GearSix,
   GraduationCap,
   ListBullets,
   MagicWand,
@@ -37,6 +38,8 @@ import { TocList } from "./components/TocList";
 import type { RangeKind, TranslateActions } from "./components/TranslateMenu";
 import { Library } from "./library/Library";
 import { initialPdf, onEngineError, onOpenPdf, pdfSource, pickPdf } from "./lib/engineConnect";
+import { describeError, ERROR_ACTION_LABEL } from "./lib/errors";
+import { SettingsScreen, type SettingsSection } from "./settings/SettingsScreen";
 import { parsePageSpec, stopReasonText } from "./lib/format";
 import { loadPdf, outline, type OutlineItem, type PdfDoc } from "./lib/pdf";
 import { useConfirmed } from "./lib/useConfirmed";
@@ -44,15 +47,6 @@ import { ReaderCanvas } from "./reader/ReaderCanvas";
 import { fitZoom, MAX_ZOOM as READER_MAX_ZOOM } from "./reader/geometry";
 import { initialState, MODE_LABELS, reducer, type SidePanel as PanelTab } from "./state";
 import { TipProvider, ToastProvider, usePref, useShortcuts, useTheme, useToast, type ShortcutMap } from "./ui";
-
-const ERROR_TEXT: Partial<Record<EngineError["kind"], string>> = {
-  usage_limit: "Kullanım limitine ulaşıldı — iş duraklatıldı.",
-  auth: "Claude girişi yok: terminalde `claude` ile giriş yapın.",
-  budget: "Bütçe sınırı aşıldı — durdu.",
-  unavailable: "Sağlayıcı ya da motor şu an kullanılamıyor.",
-  expired_token: "Onayın süresi doldu; tahmini yeniden alın.",
-  conflict: "Kitap dosyası kayıtlı yolda değişmiş; PDF'i yeniden açın.",
-};
 
 const MODE_KEY = "rosetta.mode";
 /** Fit-to-width never blows a single page past this (a 1920 px window would otherwise read at ~230 %). */
@@ -107,7 +101,9 @@ function Shell({ api, mock, engineError = null, loadDocument = loadPdf }: Props)
   const [rangeSeed, setRangeSeed] = useState("");
   const [chromeHidden, setChromeHidden] = useState(false);
   const [libraryKey, setLibraryKey] = useState(0);
-  const [theme, , cycleTheme] = useTheme();
+  const [theme, setTheme, cycleTheme] = useTheme();
+  const [settingsAt, setSettingsAt] = useState<SettingsSection | null>(null);
+  const [jobBudget, setJobBudget] = useState<number | null>(null);
   const [pinned, setPinned] = usePref("rosetta.chrome.pinned", false);
   const toast = useToast();
   const docRef = useRef<PdfDoc | null>(null);
@@ -120,13 +116,34 @@ function Shell({ api, mock, engineError = null, loadDocument = loadPdf }: Props)
 
   const onError = useCallback(
     (e: unknown) => {
-      const message = e instanceof EngineError ? (ERROR_TEXT[e.kind] ?? e.message) : e instanceof Error ? e.message : String(e);
-      toast({ message, tone: "error" });
+      const { message, action } = describeError(e);
+      toast({
+        message,
+        tone: "error",
+        action: action
+          ? {
+              label: ERROR_ACTION_LABEL[action],
+              onClick: () => (action === "settings" ? setSettingsAt("claude") : dispatch({ type: "panel", panel: "jobs" })),
+            }
+          : undefined,
+      });
     },
     [toast],
   );
 
   const confirmed = useConfirmed(onError);
+
+  useEffect(() => {
+    if (!api) return;
+    let alive = true;
+    api
+      .getSettings()
+      .then((v) => alive && setJobBudget(v.values.job_default_budget_usd))
+      .catch(() => undefined); // older engines: no settings endpoint, keep the empty default
+    return () => {
+      alive = false;
+    };
+  }, [api]);
   const bookId = state.book?.id ?? null;
   const reading = state.screen === "reader" && state.book !== null;
 
@@ -212,6 +229,13 @@ function Shell({ api, mock, engineError = null, loadDocument = loadPdf }: Props)
         if (stale()) return;
         setToc([]);
         dispatch({ type: "bookOpened", book, pdfSrc: src, page: last ?? 1 });
+        if (last && last > 1) {
+          toast({
+            message: `Kaldığınız yer: sayfa ${last}`,
+            tone: "info",
+            action: { label: "Başa dön", onClick: () => dispatch({ type: "goto", page: 1 }) },
+          });
+        }
         // In Tauri the file is loaded directly; in a plain browser (dev/E2E) it comes from the engine.
         const data = src ?? (await api.bookFile(book.id));
         if (stale()) return;
@@ -230,7 +254,7 @@ function Shell({ api, mock, engineError = null, loadDocument = loadPdf }: Props)
         if (!stale()) onError(e);
       }
     },
-    [api, loadDocument, onError, showDoc],
+    [api, loadDocument, onError, showDoc, toast],
   );
 
   const openBook = useCallback(async () => {
@@ -447,6 +471,7 @@ function Shell({ api, mock, engineError = null, loadDocument = loadPdf }: Props)
     onTranslateAll: (budget) => startJob("all", budget),
     onAnalyze: () => analyze(),
     onExport: (m) => void exportPdf(m),
+    defaultBudget: jobBudget,
   };
   const canAi = translateActions.disabledReason === null;
 
@@ -463,8 +488,9 @@ function Shell({ api, mock, engineError = null, loadDocument = loadPdf }: Props)
   const shortcuts: ShortcutMap = {
     "mod+k": () => setPaletteOpen((o) => !o),
     "mod+o": () => void openBook(),
+    "mod+,": () => setSettingsAt((s) => (s ? null : "translate")),
   };
-  if (reading) {
+  if (reading && !settingsAt) {
     Object.assign(shortcuts, {
       "1": () => dispatch({ type: "mode", mode: "original" }),
       "2": () => dispatch({ type: "mode", mode: "split" }),
@@ -506,6 +532,7 @@ function Shell({ api, mock, engineError = null, loadDocument = loadPdf }: Props)
     const list: PaletteAction[] = [
       { id: "open", label: "PDF aç…", group: "Uygulama", icon: <FolderOpen />, shortcut: "Ctrl O", disabled: !api, run: () => void openBook() },
       { id: "library", label: "Kitaplığa dön", group: "Uygulama", icon: <Books />, disabled: !reading, run: goLibrary },
+      { id: "settings", label: "Ayarlar", group: "Uygulama", icon: <GearSix />, shortcut: "Ctrl ,", keywords: ["tercihler", "claude", "yol", "model"], run: () => setSettingsAt("translate") },
       { id: "theme", label: "Temayı değiştir (sistem / koyu / açık)", group: "Uygulama", icon: <Moon />, keywords: ["karanlık", "tema"], run: cycleTheme },
       {
         id: "pin",
@@ -580,6 +607,20 @@ function Shell({ api, mock, engineError = null, loadDocument = loadPdf }: Props)
         />
       )}
       {explanation && <ExplanationPanel explanation={explanation} onClose={() => setExplanation(null)} />}
+      {settingsAt && (
+        <SettingsScreen
+          api={api}
+          mock={mock}
+          theme={theme}
+          onTheme={setTheme}
+          section={settingsAt}
+          onClose={() => setSettingsAt(null)}
+          onSaved={(v) => {
+            setJobBudget(v.values.job_default_budget_usd);
+            dispatch({ type: "refresh" });
+          }}
+        />
+      )}
       {confirmed.pending && (
         <CostModal estimate={confirmed.pending.estimate} busy={confirmed.busy} onConfirm={() => void confirmed.confirm()} onCancel={confirmed.cancel} />
       )}
@@ -598,6 +639,7 @@ function Shell({ api, mock, engineError = null, loadDocument = loadPdf }: Props)
           onTheme={cycleTheme}
           onPick={() => void openBook()}
           onOpenPath={openFromLibrary}
+          onSettings={() => setSettingsAt("translate")}
         />
         {overlays}
       </div>
@@ -641,6 +683,7 @@ function Shell({ api, mock, engineError = null, loadDocument = loadPdf }: Props)
         onFit={() => dispatch({ type: "fit" })}
         onTogglePanel={() => dispatch({ type: "togglePanel" })}
         onPalette={() => setPaletteOpen(true)}
+        onSettings={() => setSettingsAt("translate")}
         status={<SpendPill inline connected={api !== null && engineDown === null} mock={mock} usage={usage} error={engineDown} />}
       />
       <main ref={mainRef} className="reader__main" data-mode={state.mode}>
@@ -659,6 +702,7 @@ function Shell({ api, mock, engineError = null, loadDocument = loadPdf }: Props)
           onWordClick={onWordClick}
           onTranslatePage={(page) => translatePage(page)}
           onTranslateRange={openRangeFrom}
+          toc={toc}
         />
       </main>
       <SidePanel

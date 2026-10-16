@@ -45,7 +45,7 @@ async function translateMenu(p: Page, item: string): Promise<void> {
   await p.getByRole("menuitem", { name: item }).click();
 }
 
-const sheet = (p: Page, n: number, kind: "orijinal" | "Türkçe" | "öğrenme") => p.getByRole("figure", { name: `Sayfa ${n} (${kind})` });
+const sheet = (p: Page, n: number, kind: "orijinal" | "Türkçe" | "öğrenme") => p.getByRole("figure", { name: `Sayfa ${n} (${kind})`, exact: true });
 const toasts = (p: Page) => p.locator(".toasts");
 
 test.beforeAll(async ({ browser }) => {
@@ -291,6 +291,18 @@ for (const scheme of ["light", "dark"] as const) {
       await shot("cost-modal");
       await modal.getByRole("button", { name: "İptal" }).click();
       await expect(modal).toBeHidden();
+
+      await page.keyboard.press("Control+,");
+      const settings = page.getByRole("dialog", { name: "Ayarlar" });
+      await expect(settings).toBeVisible();
+      await expect(settings.getByText("claude CLI", { exact: true })).toBeVisible();
+      await page.waitForTimeout(300);
+      await shot("settings");
+      await settings.getByRole("link", { name: "Motor durumu" }).click();
+      await page.waitForTimeout(400);
+      await shot("settings-status");
+      await settings.getByRole("button", { name: "Geri (Esc)" }).click();
+      await expect(settings).toBeHidden();
 
       // Looking around never costs anything.
       expect(await spend(page)).toBe(before);

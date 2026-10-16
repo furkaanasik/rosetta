@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import shutil
 from pathlib import Path
 from typing import Annotated
 
@@ -25,13 +24,14 @@ from rosetta_engine.models import BlockType
 from rosetta_engine.store.db import connect, migrate
 from rosetta_engine.store.repo import Repos
 from rosetta_engine.textsafe import strip_controls
-from rosetta_engine.translate.claude_cli import CLAUDE_BIN, complete
+from rosetta_engine.translate.claude_cli import complete
+from rosetta_engine.translate.claude_locate import CLAUDE_BIN, which_claude
 from rosetta_engine.translate.fake import FakeTranslator
 from rosetta_engine.translate.service import PageTranslationService
 
 # Injection points for tests (never call the real CLI in tests).
 _complete_fn = complete
-_which = shutil.which
+_which = which_claude
 
 
 def _context(

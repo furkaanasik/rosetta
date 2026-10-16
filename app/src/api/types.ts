@@ -302,6 +302,8 @@ export type ApiErrorKind =
   | "bad_request"
   | "expired_token"
   | "conflict"
+  | "busy"
+  | "offline"
   | "unauthorized"
   | "internal";
 
@@ -315,4 +317,70 @@ export class EngineError extends Error {
     this.kind = kind;
     this.status = status;
   }
+}
+
+// --- settings & diagnostics (no AI) -------------------------------------------------------
+
+/** Keys the Ayarlar screen may change (engine `config_edit.EDITABLE_KEYS`). */
+export interface EditableSettings {
+  default_lang: string;
+  provider: string;
+  model: string;
+  explain_model: string;
+  claude_path: string | null;
+  claude_effort: string | null;
+  claude_max_thinking_tokens: number | null;
+  claude_max_budget_usd: number | null;
+  claude_timeout_s: number;
+  job_default_budget_usd: number | null;
+  batch_max_pages: number;
+  deepl_auth_key_env: string;
+  ollama_url: string;
+  ollama_model: string;
+}
+
+export interface SettingsView {
+  values: EditableSettings;
+  defaults: EditableSettings;
+  /** Keys explicitly set in config.toml (the rest are defaults). */
+  from_file: string[];
+  editable: string[];
+  config_path: string;
+}
+
+/** Partial update; `null` removes the key from config.toml (back to the default). */
+export type SettingsPatch = { [K in keyof EditableSettings]?: EditableSettings[K] | null };
+
+export interface Diagnostics {
+  engine: { version: string; python: string; pymupdf: string; frozen: boolean };
+  paths: {
+    data_dir: string;
+    config_dir: string;
+    config_file: string;
+    config_exists: boolean;
+    db: string;
+    db_bytes: number;
+  };
+  dictionary: { path: string; present: boolean; entries: number | null };
+  claude: {
+    configured: string | null;
+    path: string | null;
+    source: "settings" | "path" | "fallback" | "missing";
+    version: string | null;
+  };
+  chromium: string | null;
+  deepl: { env: string; key_set: boolean };
+  ollama: {
+    url?: string;
+    model?: string;
+    reachable: boolean | null;
+    models?: string[];
+    has_model?: boolean;
+    note?: string;
+  };
+}
+
+export interface ClaudeCandidate {
+  path: string;
+  version: string | null;
 }

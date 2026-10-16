@@ -6,8 +6,8 @@ import json
 import logging
 import os
 import re
-import shutil
 import subprocess
+import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -23,6 +23,7 @@ from rosetta_engine.errors import (
     UsageLimitError,
 )
 from rosetta_engine.translate.base import ProviderResult, TranslationRequest
+from rosetta_engine.translate.claude_locate import CLAUDE_BIN, resolve_claude
 from rosetta_engine.translate.prompt import (
     RESPONSE_SCHEMA,
     RESPONSE_SCHEMA_JSON,
@@ -33,7 +34,6 @@ from rosetta_engine.translate.validate import parse_response
 
 log = logging.getLogger(__name__)
 
-CLAUDE_BIN = "claude"
 # Never bill the API (any ANTHROPIC_* can redirect auth/billing), and never inherit a parent
 # Claude Code session's behaviour (effort, nesting, thinking budget).
 STRIPPED_ENV = ("CLAUDE_EFFORT", "CLAUDECODE", "AI_AGENT", "MAX_THINKING_TOKENS")
@@ -83,16 +83,42 @@ def run_subprocess(
 
 
 def child_env(
-    base: dict[str, str] | None = None, *, max_thinking_tokens: int | None = None
+    base: dict[str, str] | None = None,
+    *,
+    max_thinking_tokens: int | None = None,
+    frozen: bool | None = None,
 ) -> dict[str, str]:
     env = {
         k: v
         for k, v in (os.environ if base is None else base).items()
         if k in KEPT_ENV or (k not in STRIPPED_ENV and not k.startswith(STRIPPED_ENV_PREFIXES))
     }
+    _restore_library_path(env, frozen=getattr(sys, "frozen", False) if frozen is None else frozen)
     if max_thinking_tokens is not None:
         env["MAX_THINKING_TOKENS"] = str(max_thinking_tokens)
     return env
+
+
+def _restore_library_path(env: dict[str, str], *, frozen: bool) -> None:
+    """Give the claude child the user's own LD_LIBRARY_PATH.
+
+    A PyInstaller onefile build prepends its private ``_MEI…`` dir and keeps the parent's
+    value in ``LD_LIBRARY_PATH_ORIG``; an AppImage additionally adds its bundled GTK/WebKit
+    libraries under ``$APPDIR``. Neither belongs to a separately installed CLI.
+    """
+    orig = env.pop("LD_LIBRARY_PATH_ORIG", None)
+    if frozen:
+        if orig:
+            env["LD_LIBRARY_PATH"] = orig
+        else:
+            env.pop("LD_LIBRARY_PATH", None)
+    appdir = env.get("APPDIR")
+    if appdir and "LD_LIBRARY_PATH" in env:
+        kept = [d for d in env["LD_LIBRARY_PATH"].split(":") if d and not d.startswith(appdir)]
+        if kept:
+            env["LD_LIBRARY_PATH"] = ":".join(kept)
+        else:
+            del env["LD_LIBRARY_PATH"]
 
 
 def build_argv(
@@ -103,9 +129,10 @@ def build_argv(
     effort: str | None = None,
     max_budget_usd: float | None = None,
     json_schema: str | None = None,
+    claude: str = CLAUDE_BIN,
 ) -> list[str]:
     argv = [
-        CLAUDE_BIN, "-p",
+        claude, "-p",
         "--model", model,
         "--output-format", "json",
         "--tools", "",
@@ -125,16 +152,29 @@ def build_argv(
     return argv
 
 
-def claude_version() -> str | None:
-    if shutil.which(CLAUDE_BIN) is None:
+def claude_version(path: str | None = None, *, timeout_s: float = 15) -> str | None:
+    """``claude --version`` of ``path`` (default: the resolved CLI); None when unavailable."""
+    path = path or resolve_claude(load_settings().claude_path)
+    if path is None:
         return None
     try:
         proc = subprocess.run(
-            [CLAUDE_BIN, "--version"], capture_output=True, text=True, timeout=15, check=False
+            [path, "--version"],
+            capture_output=True,
+            text=True,
+            timeout=timeout_s,
+            check=False,
+            env=child_env(),
         )
     except (OSError, subprocess.TimeoutExpired):
         return None
     return proc.stdout.strip() or None
+
+
+def unavailable_message(configured: str | None) -> str:
+    if configured:
+        return f"claude CLI bulunamadı: {configured} çalıştırılabilir bir dosya değil (Ayarlar)"
+    return "claude CLI bulunamadı — Ayarlar'dan yolunu girin"
 
 
 @dataclass(frozen=True)
@@ -227,8 +267,9 @@ def complete(
     """
     settings = settings or load_settings()
     model = model or settings.model
-    if shutil.which(CLAUDE_BIN) is None:
-        raise ProviderUnavailableError("claude CLI bulunamadı (PATH'te `claude` yok)")
+    claude = resolve_claude(settings.claude_path)
+    if claude is None:
+        raise ProviderUnavailableError(unavailable_message(settings.claude_path))
     budget = max_budget_usd if max_budget_usd is not None else settings.claude_max_budget_usd
     argv = build_argv(
         model,
@@ -239,6 +280,7 @@ def complete(
         json_schema=(
             json.dumps(json_schema, separators=(",", ":")) if json_schema is not None else None
         ),
+        claude=claude,
     )
     log.debug("claude request (model=%s):\n%s", model, user_message)
     try:

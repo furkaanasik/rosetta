@@ -4,6 +4,11 @@ import {
   type BlockInfo,
   type BookInfo,
   type BookProfile,
+  type ClaudeCandidate,
+  type Diagnostics,
+  type EditableSettings,
+  type SettingsPatch,
+  type SettingsView,
   type Estimate,
   type EstimateHint,
   type Explanation,
@@ -562,4 +567,83 @@ export class MockEngineApi implements EngineApi {
   usage() {
     return this.delay({ ...this.spent });
   }
+
+  // --- settings & diagnostics ---
+  private settingsValues: EditableSettings = { ...MOCK_DEFAULT_SETTINGS };
+  private settingsFromFile = new Set<string>();
+
+  private settingsView(): SettingsView {
+    return {
+      values: { ...this.settingsValues },
+      defaults: { ...MOCK_DEFAULT_SETTINGS },
+      from_file: [...this.settingsFromFile].sort(),
+      editable: Object.keys(MOCK_DEFAULT_SETTINGS).sort(),
+      config_path: "/home/mock/.config/rosetta/config.toml",
+    };
+  }
+  getSettings() {
+    return this.delay(this.settingsView());
+  }
+  putSettings(patch: SettingsPatch) {
+    for (const [k, v] of Object.entries(patch) as [keyof EditableSettings, unknown][]) {
+      if (!(k in MOCK_DEFAULT_SETTINGS)) {
+        return Promise.reject(new EngineError("bad_request", `bu ayar buradan değiştirilemez: ${k}`, 400));
+      }
+      if (k === "ollama_url" && typeof v === "string" && !/^https?:\/\/[^/]+/.test(v)) {
+        return Promise.reject(new EngineError("bad_request", "Ollama adresi http(s)://sunucu:port biçiminde olmalı", 400));
+      }
+      if (v === null) {
+        (this.settingsValues as unknown as Record<string, unknown>)[k] = MOCK_DEFAULT_SETTINGS[k];
+        this.settingsFromFile.delete(k);
+      } else {
+        (this.settingsValues as unknown as Record<string, unknown>)[k] = v;
+        this.settingsFromFile.add(k);
+      }
+    }
+    return this.delay(this.settingsView());
+  }
+  diagnostics(): Promise<Diagnostics> {
+    const claude = this.settingsValues.claude_path ?? "/home/mock/.local/bin/claude";
+    return this.delay({
+      engine: { version: "0.1.0-mock", python: "3.13", pymupdf: "1.28.2", frozen: false },
+      paths: {
+        data_dir: "/home/mock/.local/share/rosetta",
+        config_dir: "/home/mock/.config/rosetta",
+        config_file: "/home/mock/.config/rosetta/config.toml",
+        config_exists: this.settingsFromFile.size > 0,
+        db: "/home/mock/.local/share/rosetta/rosetta.db",
+        db_bytes: 1_048_576,
+      },
+      dictionary: { path: "/home/mock/.local/share/rosetta/dictionary.db", present: true, entries: 662_319 },
+      claude: {
+        configured: this.settingsValues.claude_path,
+        path: claude,
+        source: this.settingsValues.claude_path ? "settings" : "path",
+        version: "2.1.284 (Claude Code)",
+      },
+      chromium: "/usr/bin/chromium",
+      deepl: { env: this.settingsValues.deepl_auth_key_env, key_set: false },
+      ollama: { url: this.settingsValues.ollama_url, model: this.settingsValues.ollama_model, reachable: false },
+    });
+  }
+  detectClaude(): Promise<ClaudeCandidate[]> {
+    return this.delay([{ path: "/home/mock/.local/bin/claude", version: "2.1.284 (Claude Code)" }]);
+  }
 }
+
+export const MOCK_DEFAULT_SETTINGS: EditableSettings = {
+  default_lang: "tr",
+  provider: "claude-cli",
+  model: "sonnet",
+  explain_model: "haiku",
+  claude_path: null,
+  claude_effort: "medium",
+  claude_max_thinking_tokens: null,
+  claude_max_budget_usd: 0.25,
+  claude_timeout_s: 240,
+  job_default_budget_usd: null,
+  batch_max_pages: 5,
+  deepl_auth_key_env: "DEEPL_AUTH_KEY",
+  ollama_url: "http://localhost:11434",
+  ollama_model: "qwen2.5:7b",
+};

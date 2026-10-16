@@ -1,5 +1,9 @@
 import type {
   BookInfo,
+  ClaudeCandidate,
+  Diagnostics,
+  SettingsPatch,
+  SettingsView,
   BookProfile,
   Estimate,
   EstimateHint,
@@ -96,6 +100,14 @@ export interface EngineApi {
   explain(confirmToken: string): Promise<Explanation>;
 
   usage(bookId?: number): Promise<UsageTotals>;
+
+  // --- settings & diagnostics (no AI) ---
+  getSettings(): Promise<SettingsView>;
+  /** Validated server-side and written to config.toml; returns the new effective settings. */
+  putSettings(patch: SettingsPatch): Promise<SettingsView>;
+  diagnostics(): Promise<Diagnostics>;
+  /** claude binaries found on PATH and in known install dirs (the "Bul" button). */
+  detectClaude(): Promise<ClaudeCandidate[]>;
 }
 
 export function isExplanation(x: Estimate | Explanation): x is Explanation {

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 import re
-import shutil
 import sys
 import webbrowser
 from collections import Counter
@@ -36,7 +35,8 @@ from rosetta_engine.render.html_builder import write_index, write_page
 from rosetta_engine.store.db import connect, migrate
 from rosetta_engine.store.repo import Repos
 from rosetta_engine.translate.base import Translator
-from rosetta_engine.translate.claude_cli import CLAUDE_BIN
+from rosetta_engine.translate.claude_cli import unavailable_message
+from rosetta_engine.translate.claude_locate import resolve_claude
 from rosetta_engine.translate.providers import (
     UnknownProviderError,
     make_translator,
@@ -141,10 +141,8 @@ def format_pages(pages: list[int]) -> str:
 
 
 def _translator(provider: str, model: str | None, settings: config.Settings) -> Translator:
-    if provider == "claude-cli" and shutil.which(CLAUDE_BIN) is None:
-        raise _fail(
-            ProviderUnavailableError("claude CLI bulunamadı; Claude Code kurulu ve PATH'te mi?")
-        )
+    if provider == "claude-cli" and resolve_claude(settings.claude_path) is None:
+        raise _fail(ProviderUnavailableError(unavailable_message(settings.claude_path)))
     try:
         return make_translator(provider, model, settings)
     except UnknownProviderError as e:

@@ -45,7 +45,7 @@ SUCCESS = {
     "terminal_reason": "completed",
 }
 
-WHICH = "rosetta_engine.translate.claude_cli.shutil.which"
+WHICH = "rosetta_engine.translate.claude_locate.shutil.which"
 
 REQ = TranslationRequest(
     lang="tr", items=[TranslationItem(id=1, sentences=["Replication matters."])]
@@ -90,7 +90,7 @@ def test_argv_matches_verified_command() -> None:
 
     argv = runner.calls[0][0]
     assert argv == [
-        "claude", "-p", "--model", "sonnet", "--output-format", "json", "--tools", "",
+        "/usr/bin/claude", "-p", "--model", "sonnet", "--output-format", "json", "--tools", "",
         "--no-session-persistence", "--strict-mcp-config", "--disable-slash-commands",
         "--setting-sources", "", "--system-prompt", build_system_prompt("tr"),
         "--effort", "medium", "--max-budget-usd", "0.2500",

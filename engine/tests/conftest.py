@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+import os
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 import pymupdf
 import pytest
+
+# Rich must not colour CLI output in tests, even when the calling shell forces colour.
+for _var in ("FORCE_COLOR", "CLICOLOR_FORCE"):
+    os.environ.pop(_var, None)
 
 DDIA_PATH = Path.home() / "SSD/Books/Designing Data-Intensive Applications 2nd.pdf"
 
@@ -105,3 +110,9 @@ def ddia_path() -> Path:
     if not DDIA_PATH.is_file():
         pytest.skip("DDIA test book not available")
     return DDIA_PATH
+
+
+@pytest.fixture(autouse=True)
+def _no_claude_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Tests decide whether `claude` exists by patching shutil.which; never find the real one."""
+    monkeypatch.setattr("rosetta_engine.translate.claude_locate.fallback_candidates", lambda: [])

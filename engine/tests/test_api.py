@@ -452,8 +452,8 @@ def test_job_pause_and_resume(client: TestClient, book_pdf: Path, translators: T
     other = ok(client.post(f"/api/books/{bid}/jobs/estimate", json={"pages": [3]}, headers=AUTH))
     err(
         client.post("/api/jobs", json={"confirm_token": other["confirm_token"]}, headers=AUTH),
-        "unavailable",
-        503,
+        "busy",
+        409,
     )
     gate.set()
     paused = wait_job(client, job["id"], {"paused"})
@@ -544,6 +544,12 @@ def test_retry_failed_runs_only_the_confirmed_failed_pages(
             headers=AUTH,
         )
     )
+    # the job is already "paused" before the retry thread starts: wait for its result instead
+    deadline = time.monotonic() + 10
+    after = ok(client.get(f"/api/jobs/{row.id}", headers=AUTH))
+    while not after["done_pages"] and time.monotonic() < deadline:
+        time.sleep(0.05)
+        after = ok(client.get(f"/api/jobs/{row.id}", headers=AUTH))
     after = wait_job(client, row.id, {"paused", "done", "failed"})
 
     assert translators.calls == 1  # exactly one batch: page 1 (batch_max_pages=1)
@@ -606,7 +612,7 @@ def test_busy_job_slot_consumes_no_token_and_leaves_no_job(
     assert entered.wait(10)
 
     busy = client.post("/api/jobs", json={"confirm_token": second["confirm_token"]}, headers=AUTH)
-    err(busy, "unavailable", 503)
+    err(busy, "busy", 409)
     assert len(ok(client.get("/api/jobs", headers=AUTH))) == 1  # no orphan pending job
 
     gate.set()
@@ -633,7 +639,9 @@ def test_ai_calls_are_exclusive_while_a_job_runs(
     assert entered.wait(10)
 
     body = {"confirm_token": est_tr["confirm_token"]}
-    err(client.post(f"/api/books/{bid}/translate", json=body, headers=AUTH), "unavailable", 503)
+    res = client.post(f"/api/books/{bid}/translate", json=body, headers=AUTH)
+    err(res, "busy", 409)
+    assert f"#{job['id']}" in res.json()["error"]["message"]
 
     gate.set()
     wait_job(client, job["id"], {"done"})

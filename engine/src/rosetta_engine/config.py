@@ -64,8 +64,11 @@ class Settings(BaseModel):
     model: str = "sonnet"
     explain_model: str = "haiku"  # "Bunu açıkla" (Faz 7); requirements §3.6 ask for Haiku
     batch_max_pages: int = 5
+    job_default_budget_usd: float | None = None  # pre-filled budget for new batch jobs (app)
     batch_max_input_tokens: int = 6000
     claude_timeout_s: int = 240
+    # Absolute path of the claude CLI; None = auto-detect (PATH, then common install dirs)
+    claude_path: str | None = None
     claude_effort: str | None = "medium"  # passed as `claude --effort`; None = CLI default
     # MAX_THINKING_TOKENS for the child; None = CLI default (thinking on), 0 = thinking off
     claude_max_thinking_tokens: int | None = None

@@ -179,7 +179,15 @@ class EngineState:
         """One AI operation at a time in this process (translate, profile, explain; jobs hold
         it for their whole run). Busy → 503 before any confirm token is consumed."""
         if not self.ai_lock.acquire(blocking=False):
-            raise ApiError("unavailable", "Başka bir AI işlemi çalışıyor; bitince tekrar dene")
+            with self._jobs_lock:
+                job = self._busy_job()
+            if job is not None and job > 0:
+                raise ApiError(
+                    "busy",
+                    f"Toplu iş #{job} çalışıyor; şu anki parti bitince (duraklatılmış ya da "
+                    "iptal edilmiş olsa bile) tekrar deneyin",
+                )
+            raise ApiError("busy", "Başka bir AI işlemi sürüyor; bitince tekrar deneyin")
         try:
             yield
         finally:
@@ -204,7 +212,10 @@ class EngineState:
             busy = self._busy_job()
             if busy is not None:
                 which = f" (#{busy})" if busy > 0 else ""
-                raise ApiError("unavailable", f"Başka bir toplu iş çalışıyor{which}; önce duraklat")
+                raise ApiError(
+                    "busy",
+                    f"Başka bir toplu iş çalışıyor{which}; bitmesini bekleyin ya da duraklatın",
+                )
             self._job_reserved = True
 
         def start(job_id: int, target: Callable[[], None]) -> None:

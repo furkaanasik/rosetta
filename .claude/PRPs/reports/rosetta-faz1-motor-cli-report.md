@@ -140,15 +140,15 @@ sayfa numarası dönüşümleri ve çıkış kodları doğru.
 - Alt süreç `encoding="utf-8", errors="replace"`; bütçe tespiti stderr'e değil subtype/result'a bakıyor;
   bozuk `config.toml` → `ConfigError` ile anlaşılır mesaj; `open_book` hata durumunda PDF'i kapatıyor.
 
-**Ertelenen bilinen sorunlar:**
-- Tek bir taranmış (metin katmanı olmayan) sayfa tüm planı durduruyor; atlayıp raporlamak daha iyi.
-- Eski figür kırpmaları yeniden kullanılıyor (dosya varsa); geçici dosya + rename ve dosya adına bbox/extractor sürümü.
-- Aynı anda iki ilk çalıştırmada `migrate` yarışı → `BEGIN IMMEDIATE` + sürümü içeride yeniden oku.
-- `get_many` block başına bir SELECT (tüm kitapta ~50k sorgu) → sayfa başına toplu sorgu.
-- Prompt'taki CONTEXT bölümü JSON ile kodlanmıyor (düşük risk: araç yok, çıktı doğrulanıyor).
-- Farklı sayfalardaki aynı block iki kez ödeniyor (cache sayfa bazlı).
-- Tek block `batch_max_input_tokens`'ı aşarsa yine gönderiliyor; yalnızca çağrı başı bütçe sınırı koruyor.
-- `TranslationRepo.delete_page` artık servis tarafından kullanılmıyor.
+**Ertelenen bilinen sorunlar** (son düzeltme turu, 2026-10-16):
+- ✅ Tek bir taranmış sayfa artık planı durdurmuyor: `plan.no_text_pages` ile atlanır, sayfa "metin katmanı yok" nedeniyle hatalı sayılır (CLI uyarı basar; iş/toplu iş devam eder).
+- ✅ Figür kırpmaları: dosya adında extractor sürümü + bbox özeti (`p094_b0_<hash>.png`), geçici dosya + `os.replace`.
+- ✅ `migrate` yarışı ve sıra dışı migration: `schema_migrations` defteri, her migration `BEGIN IMMEDIATE` içinde yeniden kontrol; defter öncesi DB'ler şemadan doldurulur (sonradan eklenmiş 003 yine uygulanır); yeni DB'yi WAL'a alırken kısa yeniden deneme.
+- ✅ `get_many` sayfa başına tek sorgu.
+- ✅ Prompt'taki CONTEXT JSON ile kodlanıyor (`PROMPT_VERSION` 5; cache geçerli kalır).
+- ✅ Kullanılmayan `TranslationRepo.delete_page` kaldırıldı.
+- ⏳ Farklı sayfalardaki aynı block iki kez ödeniyor (cache sayfa bazlı) — bilerek bırakıldı.
+- ⏳ Tek block `batch_max_input_tokens`'ı aşarsa yine gönderiliyor; yalnızca çağrı başı bütçe sınırı koruyor.
 
 **Çıkış kodları:** 0 başarı, 1 genel hata, 2 iptal, 3 kısmi hata, 4 kullanım limiti, 5 kimlik doğrulama,
 6 bütçe sınırı, 7 sağlayıcı kullanılamıyor.

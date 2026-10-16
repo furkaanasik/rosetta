@@ -71,6 +71,7 @@ from rosetta_engine.translate.prompt import PROMPT_VERSION
 log = logging.getLogger(__name__)
 
 CONTEXT_PARAGRAPHS = 2
+NO_TEXT_REASON = "metin katmanı yok (taranmış sayfa?); OCR desteklenmiyor"
 OUTPUT_SANITY_FACTOR = 2
 MAX_CONSECUTIVE_ERRORS = 3
 Progress = Callable[[int, int], None]
@@ -163,17 +164,16 @@ class PageTranslationService:
     def ensure_pages(
         self, book: Book, doc: pymupdf.Document, meta: BookMeta, pages: Sequence[int]
     ) -> dict[int, PageBlocks]:
-        """Extracted blocks for 0-based ``pages`` (from DB, or extracted and stored)."""
+        """Extracted blocks for 0-based ``pages`` (from DB, or extracted and stored).
+
+        Pages without a text layer (scanned) come back with ``has_text_layer=False`` and no
+        blocks; callers skip them instead of aborting a whole range.
+        """
         out: dict[int, PageBlocks] = {}
         for p in pages:
             if not 0 <= p < book.page_count:
                 raise ExtractionError(f"page {p + 1} out of range (1-{book.page_count})")
-            page = self._load_page(book, doc, meta, p)
-            if not page.has_text_layer:
-                raise ExtractionError(
-                    f"page {p + 1} has no text layer (scanned PDF?); OCR is not supported"
-                )
-            out[p] = page
+            out[p] = self._load_page(book, doc, meta, p)
         return out
 
     def _load_page(
@@ -213,6 +213,9 @@ class PageTranslationService:
         profile = profile or BookProfile()
         pages = sorted(set(pages))
         extracted = self.ensure_pages(book, doc, meta, pages)
+        no_text = [p for p in pages if not extracted[p].has_text_layer]
+        if no_text:
+            log.warning("skipping pages without a text layer: %s", [p + 1 for p in no_text])
         translatable = {p: [b for b in extracted[p].blocks if _needs_translation(b)] for p in pages}
         total = sum(len(v) for v in translatable.values())
         todo = {p: self._uncached(book, translatable[p], lang, force) for p in pages}
@@ -246,6 +249,7 @@ class PageTranslationService:
             cached_blocks=cached,
             batches=batches,
             estimate=estimate,
+            no_text_pages=no_text,
         )
 
     def _batch(
@@ -378,8 +382,11 @@ class PageTranslationService:
         stop_kind: StopKind | None = None
         consecutive_errors = 0
 
+        for p in plan.no_text_pages:
+            failed[p] = NO_TEXT_REASON
+            self._fail_page(book, p, lang, NO_TEXT_REASON)
         for p in plan.pages:
-            if not needed[p]:
+            if not needed[p] and p not in failed:
                 self._save_page(book, p, lang, [], overwrite=force)
                 done.append(p)
 

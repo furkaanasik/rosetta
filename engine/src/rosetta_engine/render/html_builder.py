@@ -8,6 +8,8 @@ from book or model text.
 
 from __future__ import annotations
 
+import hashlib
+import os
 import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -19,6 +21,7 @@ import pymupdf
 from jinja2 import Environment, PackageLoader, select_autoescape
 from markupsafe import Markup, escape
 
+from rosetta_engine.extract.extractor import EXTRACTOR_VERSION
 from rosetta_engine.models import Block, BlockType, Book, PageBlocks, Translation
 
 Mode = Literal["tr", "review", "learn", "debug"]
@@ -233,8 +236,15 @@ def _heading_level(block: Block) -> int:
     return min(max(level, 1), 6)
 
 
+def crop_name(block: Block) -> str:
+    """Asset file name; extractor version + bbox hash make stale crops impossible to reuse."""
+    key = f"{EXTRACTOR_VERSION}:{','.join(f'{v:.2f}' for v in block.bbox)}"
+    digest = hashlib.sha256(key.encode()).hexdigest()[:8]
+    return f"p{block.page_no + 1:03d}_b{block.order}_{digest}.png"
+
+
 def _crop(block: Block, out_dir: Path, doc: pymupdf.Document | None) -> str | None:
-    rel = f"{ASSETS_DIR}/p{block.page_no + 1:03d}_b{block.order}.png"
+    rel = f"{ASSETS_DIR}/{crop_name(block)}"
     target = out_dir / rel
     if target.is_file():
         return rel
@@ -243,7 +253,13 @@ def _crop(block: Block, out_dir: Path, doc: pymupdf.Document | None) -> str | No
     target.parent.mkdir(parents=True, exist_ok=True)
     d: Any = doc
     pix = d[block.page_no].get_pixmap(clip=block.bbox, dpi=CROP_DPI)
-    pix.save(str(target))
+    # Write then rename: a crash mid-write never leaves a truncated file that looks valid.
+    tmp = target.with_name(f".{target.name}.{os.getpid()}.tmp")
+    try:
+        pix.save(str(tmp), output="png")
+        os.replace(tmp, target)
+    finally:
+        tmp.unlink(missing_ok=True)
     return rel
 
 

@@ -74,7 +74,7 @@ def _block(order: int, t: BlockType, text: str, **kw: object) -> Block:
 
 
 def test_migration_is_idempotent(conn: sqlite3.Connection) -> None:
-    latest = max(number for number, _ in db._migrations())
+    latest = max(number for number, *_ in db._migrations())
     assert latest >= 3
     assert db.migrate(conn) == latest
     assert db.current_version(conn) == latest
@@ -209,15 +209,6 @@ def test_failed_put_leaves_no_half_page(repos: Repos, book_id: int) -> None:
     assert repos.page_status.get(book_id, 3, LANG, PROVIDER, MODEL) is None
 
 
-def test_delete_page_for_force(repos: Repos, book_id: int) -> None:
-    repos.translations.put_page([_row(book_id, 3, "aaa")], _status(book_id, 3))
-
-    repos.translations.delete_page(book_id, 3, LANG, PROVIDER, MODEL)
-
-    assert repos.translations.for_page(book_id, 3, LANG, PROVIDER, MODEL) == {}
-    assert repos.page_status.get(book_id, 3, LANG, PROVIDER, MODEL) is None
-
-
 def test_page_status_upsert(repos: Repos, book_id: int) -> None:
     repos.page_status.set(PageStatusRow(book_id, 5, LANG, PROVIDER, MODEL, "failed", "bad json"))
     repos.page_status.set(_status(book_id, 5))
@@ -278,3 +269,67 @@ def test_excluded_rows_do_not_calibrate(conn: sqlite3.Connection) -> None:
     assert excluded == 1
     assert repos.usage.recent_ok(PROVIDER, MODEL) == [(100, 100, 200, 210)]
     assert repos.usage.total(bid).calls == 2  # still counted in usage totals
+
+
+def test_out_of_order_migration_is_applied_on_legacy_db(tmp_path: Path) -> None:
+    # A DB that reached 004 before 003 existed: no ledger, user_version 4, no jobs table.
+    c = sqlite3.connect(tmp_path / "legacy.db")
+    for number, _, sql in db._migrations():
+        if number in (1, 2, 4):
+            c.executescript(sql)
+    c.execute("PRAGMA user_version = 4")
+    c.commit()
+    c.close()
+    conn = db.connect(tmp_path / "legacy.db")
+
+    version = db.migrate(conn)
+
+    tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    assert "jobs" in tables
+    assert version == max(n for n, *_ in db._migrations())
+    assert db.applied_migrations(conn) == {n for n, *_ in db._migrations()}
+    conn.close()
+
+
+def test_missing_ledger_entry_is_applied(tmp_path: Path) -> None:
+    conn = db.connect(tmp_path / "r.db")
+    db.migrate(conn)
+    conn.execute("DROP TABLE explanations")
+    conn.execute("DELETE FROM schema_migrations WHERE number = 5")
+    conn.commit()
+
+    db.migrate(conn)
+
+    tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    assert "explanations" in tables
+    conn.close()
+
+
+def test_concurrent_first_migrate_is_safe(tmp_path: Path) -> None:
+    import threading
+
+    path = tmp_path / "race.db"
+    errors: list[BaseException] = []
+    results: list[int] = []
+
+    def run() -> None:
+        try:
+            c = db.connect(path)
+            results.append(db.migrate(c))
+            c.close()
+        except BaseException as e:
+            errors.append(e)
+
+    threads = [threading.Thread(target=run) for _ in range(4)]
+    for th in threads:
+        th.start()
+    for th in threads:
+        th.join()
+
+    assert errors == []
+    latest = max(n for n, *_ in db._migrations())
+    assert results == [latest] * 4
+    c = db.connect(path)
+    rows = c.execute("SELECT number, COUNT(*) FROM schema_migrations GROUP BY number").fetchall()
+    assert all(count == 1 for _, count in rows)
+    c.close()

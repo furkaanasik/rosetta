@@ -255,6 +255,12 @@ def _num(n: int) -> str:
 
 def _print_plan(plan: TranslationPlan, s: _Session) -> None:
     e = plan.estimate
+    if plan.no_text_pages:
+        console.print(
+            "[yellow]Metin katmanı yok, atlanıyor:[/] sayfa "
+            + format_pages(plan.no_text_pages)
+            + " (taranmış sayfa; OCR desteklenmiyor)"
+        )
     console.print(f"Cache: {plan.cached_blocks}/{plan.total_blocks} block hazır")
     console.print(f"Tahmin ({s.provider} / {plan.model}):")
     thinking = ""

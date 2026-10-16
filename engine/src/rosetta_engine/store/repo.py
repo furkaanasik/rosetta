@@ -258,16 +258,17 @@ def _translation(row: sqlite3.Row) -> Translation:
 
 class TranslationRepo(_Repo):
     def get_many(self, book_id: int, keys: Sequence[CacheKey]) -> dict[CacheKey, Translation]:
-        out: dict[CacheKey, Translation] = {}
+        """One query per (page, lang, provider, model) group instead of one per block."""
+        groups: dict[tuple[int, str, str, str], list[CacheKey]] = {}
         for key in dict.fromkeys(keys):
-            row = self._c.execute(
-                "SELECT page_no, text_hash, text, sentences_json, sentence_aligned "
-                "FROM translations WHERE book_id = ? AND page_no = ? AND text_hash = ? "
-                "AND lang = ? AND provider = ? AND model = ?",
-                (book_id, *key),
-            ).fetchone()
-            if row is not None:
-                out[key] = _translation(row)
+            groups.setdefault((key.page_no, key.lang, key.provider, key.model), []).append(key)
+        out: dict[CacheKey, Translation] = {}
+        for (page_no, lang, provider, model), group in groups.items():
+            page = self.for_page(book_id, page_no, lang, provider, model)
+            for key in group:
+                hit = page.get(key.text_hash)
+                if hit is not None:
+                    out[key] = hit
         return out
 
     def for_page(
@@ -307,13 +308,6 @@ class TranslationRepo(_Repo):
         with self._c:
             _insert_translations(self._c, rows, now, overwrite)
             _upsert_status(self._c, status, now)
-
-    def delete_page(self, book_id: int, page_no: int, lang: str, provider: str, model: str) -> None:
-        with self._c:
-            params = (book_id, page_no, lang, provider, model)
-            where = "book_id = ? AND page_no = ? AND lang = ? AND provider = ? AND model = ?"
-            self._c.execute(f"DELETE FROM translations WHERE {where}", params)
-            self._c.execute(f"DELETE FROM page_status WHERE {where}", params)
 
 
 _INSERT_TRANSLATION = (

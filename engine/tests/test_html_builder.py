@@ -8,6 +8,7 @@ from rosetta_engine.render.html_builder import (
     build_page_html,
     callout_glyph,
     code_markup,
+    crop_name,
     inline,
     marker_number,
     page_filename,
@@ -225,11 +226,22 @@ def test_image_crop_written(tmp_path: Path, book_pdf: Path) -> None:
 
     path = write_page(BOOK, page_of(img), {}, "tr", out, doc=doc)
 
-    crop = out / "assets" / "p001_b3.png"
+    name = crop_name(img)
+    crop = out / "assets" / name
+    assert name.startswith("p001_b3_") and name.endswith(".png")
     assert crop.is_file() and crop.stat().st_size > 0
+    assert not list((out / "assets").glob(".*.tmp"))
     assert path == out / "p001.tr.html"
-    assert 'src="assets/p001_b3.png"' in path.read_text()
+    assert f'src="assets/{name}"' in path.read_text()
     assert (out / "style.css").is_file()
+
+
+def test_crop_name_changes_with_bbox() -> None:
+    a = mk(3, BlockType.IMAGE, bbox=(100, 340, 495, 470))
+    b = mk(3, BlockType.IMAGE, bbox=(100, 340, 495, 480))
+
+    assert crop_name(a) != crop_name(b)
+    assert crop_name(a) == crop_name(mk(3, BlockType.IMAGE, bbox=(100, 340, 495, 470)))
 
 
 def test_missing_crop_without_doc_gives_placeholder(tmp_path: Path) -> None:

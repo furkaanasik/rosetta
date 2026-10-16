@@ -9,7 +9,7 @@ from typing import Any
 from rosetta_engine.models import BookProfile
 from rosetta_engine.translate.base import TranslationItem, TranslationRequest
 
-PROMPT_VERSION = 4
+PROMPT_VERSION = 5
 
 LANG_NAMES = {"tr": "Turkish", "en": "English", "de": "German", "fr": "French", "es": "Spanish"}
 
@@ -104,6 +104,7 @@ def build_user_message(request: TranslationRequest) -> str:
     if profile:
         parts.append("PROFILE:\n" + _dumps(profile))
     if request.context:
-        parts.append("CONTEXT (do not translate):\n" + "\n".join(request.context))
+        # JSON-encoded so book text can never imitate another section (e.g. a fake "ITEMS:").
+        parts.append("CONTEXT (do not translate):\n" + _dumps(list(request.context)))
     parts.append("ITEMS:\n" + _dumps([_item_json(i) for i in request.items]))
     return "\n\n".join(parts)

@@ -17,7 +17,7 @@ from rosetta_engine.store import db
 from rosetta_engine.store.repo import Repos
 from rosetta_engine.translate import service as service_mod
 from rosetta_engine.translate.fake import FailMode, FakeTranslator
-from rosetta_engine.translate.service import PageTranslationService
+from rosetta_engine.translate.service import NO_TEXT_REASON, PageTranslationService
 
 ALL = [0, 1, 2]
 SKIPPED = {BlockType.CODE, BlockType.IMAGE, BlockType.TABLE, BlockType.FURNITURE}
@@ -218,7 +218,7 @@ def test_same_pdf_other_path_is_same_book(repos: Repos, book_pdf: Path, tmp_path
     assert b.file_path == str(copy.resolve())
 
 
-def test_page_without_text_layer_raises(
+def test_page_without_text_layer_is_skipped(
     repos: Repos, make_pdf: Callable[[Callable[[Any], None], str], Path]
 ) -> None:
     def fill(doc: Any) -> None:
@@ -228,8 +228,13 @@ def test_page_without_text_layer_raises(
     svc, fake = _service(repos)
     book, doc, meta = svc.open_book(make_pdf(fill, "scan.pdf"))
 
-    with pytest.raises(ExtractionError, match="no text layer"):
-        svc.plan(book, doc, meta, [0], "tr")
+    plan = svc.plan(book, doc, meta, [0], "tr")
+    report = svc.execute(plan)
+
+    assert plan.no_text_pages == [0]
+    assert plan.batches == []
+    assert report.failed_pages == {0: NO_TEXT_REASON}
+    assert report.done_pages == []
     assert fake.calls == []
 
 
@@ -464,3 +469,26 @@ def test_open_book_closes_doc_on_error(
     with pytest.raises(RuntimeError):
         svc.open_book(book_pdf)
     assert closed == [True]
+
+
+def test_scanned_page_in_range_does_not_abort(
+    repos: Repos, make_pdf: Callable[[Callable[[Any], None], str], Path], lorem: str
+) -> None:
+    def fill(doc: Any) -> None:
+        for n in range(3):
+            page = doc.new_page()
+            if n == 1:
+                page.draw_rect(pymupdf.Rect(50, 50, 200, 200), fill=(0.5, 0.5, 0.5))
+            else:
+                page.insert_textbox(pymupdf.Rect(50, 80, 545, 400), lorem, fontname="tiro")
+
+    svc, fake = _service(repos)
+    book, doc, meta = svc.open_book(make_pdf(fill, "mixed.pdf"))
+
+    plan = svc.plan(book, doc, meta, [0, 1, 2], "tr")
+    report = svc.execute(plan)
+
+    assert plan.no_text_pages == [1]
+    assert report.done_pages == [0, 2]
+    assert report.failed_pages == {1: NO_TEXT_REASON}
+    assert fake.calls

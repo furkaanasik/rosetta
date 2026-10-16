@@ -144,6 +144,7 @@ class TranslationPlan(BaseModel):
     cached_blocks: int = 0
     batches: list[Batch] = Field(default_factory=list)
     estimate: CostEstimate = Field(default_factory=CostEstimate)
+    no_text_pages: list[int] = Field(default_factory=list)  # scanned pages, skipped
 
 
 class UsageTotals(BaseModel):

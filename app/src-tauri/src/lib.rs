@@ -15,6 +15,35 @@ pub struct EngineInfo {
     pub token: String,
 }
 
+/// First PDF given on the command line (`rosetta kitap.pdf`, or `%f` from the .desktop file).
+pub fn pdf_from_args<I, S>(args: I, cwd: &std::path::Path) -> Option<String>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    args.into_iter().skip(1).find_map(|raw| {
+        let raw = raw.as_ref();
+        let raw = raw.strip_prefix("file://").unwrap_or(raw);
+        if raw.starts_with('-') || !raw.to_ascii_lowercase().ends_with(".pdf") {
+            return None;
+        }
+        let path = std::path::Path::new(raw);
+        let abs = if path.is_absolute() { path.to_path_buf() } else { cwd.join(path) };
+        abs.is_file().then(|| abs.to_string_lossy().into_owned())
+    })
+}
+
+#[derive(Default)]
+struct OpenState {
+    initial: Mutex<Option<String>>,
+}
+
+/// The PDF to open at startup (taken once).
+#[tauri::command]
+fn initial_pdf(state: State<'_, OpenState>) -> Option<String> {
+    state.initial.lock().ok().and_then(|mut p| p.take())
+}
+
 #[derive(Default)]
 struct EngineState {
     info: Mutex<Option<EngineInfo>>,
@@ -139,11 +168,23 @@ fn start_engine(app: &AppHandle) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let initial = pdf_from_args(std::env::args(), &cwd);
     tauri::Builder::default()
+        // A second launch (e.g. "Open with Rosetta" while running) hands its PDF to this window.
+        .plugin(tauri_plugin_single_instance::init(|app, argv, cwd| {
+            if let Some(path) = pdf_from_args(argv, std::path::Path::new(&cwd)) {
+                let _ = app.emit("open-pdf", path);
+            }
+            if let Some(w) = app.get_webview_window("main") {
+                let _ = w.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
         .manage(EngineState::default())
-        .invoke_handler(tauri::generate_handler![engine_info])
+        .manage(OpenState { initial: Mutex::new(initial) })
+        .invoke_handler(tauri::generate_handler![engine_info, initial_pdf])
         .setup(|app| {
             start_engine(app.handle());
             Ok(())
@@ -180,6 +221,22 @@ mod tests {
     fn rejects_garbage_and_port_zero() {
         assert!(parse_ready_line("INFO starting").is_none());
         assert!(parse_ready_line("{\"port\": 0, \"token\": \"x\"}").is_none());
+    }
+
+    #[test]
+    fn pdf_from_args_picks_first_existing_pdf() {
+        let dir = std::env::temp_dir().join(format!("rosetta-args-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("kitap.pdf"), b"%PDF-1.4").unwrap();
+        let abs = dir.join("kitap.pdf").to_string_lossy().into_owned();
+
+        assert_eq!(pdf_from_args(["rosetta", "kitap.pdf"], &dir), Some(abs.clone()));
+        assert_eq!(pdf_from_args(["rosetta", &format!("file://{abs}")], &dir), Some(abs.clone()));
+        assert_eq!(pdf_from_args(["rosetta", "--flag", "kitap.pdf"], &dir), Some(abs));
+        assert_eq!(pdf_from_args(["rosetta", "yok.pdf"], &dir), None);
+        assert_eq!(pdf_from_args(["rosetta", "notes.txt"], &dir), None);
+        assert_eq!(pdf_from_args(["rosetta"], &dir), None);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

@@ -12,7 +12,7 @@ import { ProfileEditor } from "./components/ProfileEditor";
 import { Sidebar } from "./components/Sidebar";
 import { StatusBar } from "./components/StatusBar";
 import { TopBar } from "./components/TopBar";
-import { pdfSource, pickPdf } from "./lib/engineConnect";
+import { initialPdf, onOpenPdf, pdfSource, pickPdf } from "./lib/engineConnect";
 import { parsePageSpec, stopReasonText } from "./lib/format";
 import { loadPdf, outline, type OutlineItem, type PdfDoc } from "./lib/pdf";
 import { useConfirmed } from "./lib/useConfirmed";
@@ -69,11 +69,9 @@ export function App({ api, mock, loadDocument = loadPdf }: Props) {
 
   useEffect(refreshUsage, [refreshUsage, state.revision]);
 
-  const openBook = useCallback(async () => {
+  const openPath = useCallback(async (path: string) => {
     if (!api) return;
     try {
-      const path = await pickPdf();
-      if (!path) return;
       const book = await api.openBook(path);
       const src = await pdfSource(path);
       dispatch({ type: "bookOpened", book, pdfSrc: src });
@@ -92,6 +90,36 @@ export function App({ api, mock, loadDocument = loadPdf }: Props) {
       onError(e);
     }
   }, [api, loadDocument, onError]);
+
+  const openBook = useCallback(async () => {
+    if (!api) return;
+    try {
+      const path = await pickPdf();
+      if (path) await openPath(path);
+    } catch (e) {
+      onError(e);
+    }
+  }, [api, openPath, onError]);
+
+  // "Open with Rosetta" / `rosetta kitap.pdf`: the launch argument, then any later hand-overs.
+  useEffect(() => {
+    if (!api) return;
+    let cancelled = false;
+    let unlisten: (() => void) | undefined;
+    void initialPdf()
+      .then((path) => {
+        if (path && !cancelled) void openPath(path);
+      })
+      .catch(onError);
+    void onOpenPdf((path) => void openPath(path)).then((u) => {
+      if (cancelled) u();
+      else unlisten = u;
+    });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [api, openPath, onError]);
 
   const afterAi = useCallback(() => {
     dispatch({ type: "refresh" });

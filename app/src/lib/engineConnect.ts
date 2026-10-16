@@ -57,3 +57,23 @@ export async function pdfSource(path: string): Promise<string | null> {
   }
   return null;
 }
+
+/**
+ * PDF given at launch: argv / "Open with Rosetta" in Tauri (taken once), or `?open=<path>`
+ * in browser dev.
+ */
+export async function initialPdf(search: string = typeof window !== "undefined" ? window.location.search : ""): Promise<string | null> {
+  if (isTauri()) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return (await invoke<string | null>("initial_pdf")) ?? null;
+  }
+  const path = new URLSearchParams(search).get("open");
+  return path && path.trim() ? path : null;
+}
+
+/** PDFs handed over by a second launch while the app is running (Tauri only). */
+export async function onOpenPdf(cb: (path: string) => void): Promise<() => void> {
+  if (!isTauri()) return () => undefined;
+  const { listen } = await import("@tauri-apps/api/event");
+  return listen<string>("open-pdf", (e) => cb(e.payload));
+}

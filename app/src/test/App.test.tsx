@@ -53,6 +53,21 @@ describe("App", () => {
     await waitFor(() => expect(screen.getByTestId("spend")).toHaveTextContent("1 çağrı"));
   });
 
+  it("opens the PDF given at launch (?open=) without the picker", async () => {
+    const api = new MockEngineApi();
+    const spy = vi.spyOn(api, "openBook");
+    const prompt = vi.spyOn(window, "prompt");
+    window.history.pushState({}, "", "/?open=/books/kitap.pdf");
+    try {
+      render(<App api={api} mock />);
+      await screen.findByText("kitap");
+      expect(spy).toHaveBeenCalledWith("/books/kitap.pdf");
+      expect(prompt).not.toHaveBeenCalled();
+    } finally {
+      window.history.pushState({}, "", "/");
+    }
+  });
+
   it("disables AI buttons without an engine", () => {
     render(<App api={null} mock={false} />);
     expect(screen.getByRole("button", { name: "Kitabı Analiz Et" })).toBeDisabled();

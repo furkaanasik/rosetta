@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { useLatest } from "../lib/useLatest";
 import type { EngineApi } from "../api/engine";
 import type { LearnStats, Rating, ReviewCard, TermInfo, VocabItem } from "../api/types";
 
@@ -41,7 +42,8 @@ export function LearnPanel({ api, bookId, refreshKey, onChange }: Props) {
 function VocabList({ api, refreshKey, onChange }: { api: EngineApi; refreshKey: number; onChange: () => void }) {
   const [items, setItems] = useState<VocabItem[]>([]);
   const [search, setSearch] = useState("");
-  const load = useCallback(() => api.listVocab({ search: search || undefined }).then(setItems), [api, search]);
+  const latest = useLatest();
+  const load = useCallback(() => latest(api.listVocab({ search: search || undefined }), setItems), [api, search, latest]);
   useEffect(() => {
     void load();
   }, [load, refreshKey]);
@@ -71,9 +73,10 @@ function VocabList({ api, refreshKey, onChange }: { api: EngineApi; refreshKey: 
 function Review({ api, onChange }: { api: EngineApi; onChange: () => void }) {
   const [cards, setCards] = useState<ReviewCard[] | null>(null);
   const [flipped, setFlipped] = useState(false);
+  const latest = useLatest();
   useEffect(() => {
-    void api.dueCards(50).then(setCards);
-  }, [api]);
+    void latest(api.dueCards(50), setCards);
+  }, [api, latest]);
   if (!cards) return <p className="muted">Yükleniyor…</p>;
   const card = cards[0];
   if (!card) return <p className="muted">Bugün tekrar edilecek kart yok. 🎉</p>;
@@ -106,7 +109,11 @@ function Review({ api, onChange }: { api: EngineApi; onChange: () => void }) {
 
 function Terms({ api, bookId, onChange }: { api: EngineApi; bookId: number | null; onChange: () => void }) {
   const [terms, setTerms] = useState<TermInfo[]>([]);
-  const load = useCallback(() => (bookId === null ? Promise.resolve() : api.terms(bookId).then(setTerms)), [api, bookId]);
+  const latest = useLatest();
+  const load = useCallback(
+    () => (bookId === null ? latest(Promise.resolve([]), setTerms) : latest(api.terms(bookId), setTerms)),
+    [api, bookId, latest],
+  );
   useEffect(() => {
     void load();
   }, [load]);
@@ -132,9 +139,10 @@ function Terms({ api, bookId, onChange }: { api: EngineApi; bookId: number | nul
 
 function Stats({ api, refreshKey }: { api: EngineApi; refreshKey: number }) {
   const [s, setS] = useState<LearnStats | null>(null);
+  const latest = useLatest();
   useEffect(() => {
-    void api.stats().then(setS);
-  }, [api, refreshKey]);
+    void latest(api.stats(), setS);
+  }, [api, refreshKey, latest]);
   if (!s) return <p className="muted">Yükleniyor…</p>;
   return (
     <dl className="stats">

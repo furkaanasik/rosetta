@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { useLatest } from "../lib/useLatest";
 import type { EngineApi } from "../api/engine";
 import type { Estimate, Job } from "../api/types";
 import { stopReasonText, usd } from "../lib/format";
@@ -22,13 +23,16 @@ interface Props {
 
 export function JobsPanel({ api, bookId, refreshKey, requestConfirmed, onChange }: Props) {
   const [jobs, setJobs] = useState<Job[]>([]);
+  const latest = useLatest();
 
   const load = useCallback(async () => {
     if (!api) return;
-    const list = await api.listJobs(bookId ?? undefined);
-    const fresh = await Promise.all(list.map((j) => (j.status === "running" ? api.getJob(j.id) : j)));
-    setJobs(fresh);
-  }, [api, bookId]);
+    const fetchJobs = async () => {
+      const list = await api.listJobs(bookId ?? undefined);
+      return Promise.all(list.map((j) => (j.status === "running" ? api.getJob(j.id) : j)));
+    };
+    await latest(fetchJobs(), setJobs);
+  }, [api, bookId, latest]);
 
   useEffect(() => {
     void load();

@@ -99,7 +99,7 @@ def test_synthetic_page_callouts_in_code_and_list_numbers(marker_pdf: Path) -> N
 
 
 def test_extractor_version_bumped() -> None:
-    assert EXTRACTOR_VERSION == 2
+    assert EXTRACTOR_VERSION >= 2
 
 
 # --- real book (skipped when absent) --------------------------------------------------------

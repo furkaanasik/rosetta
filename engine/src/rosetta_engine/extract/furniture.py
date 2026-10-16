@@ -19,6 +19,8 @@ _SPACE = re.compile(r"\s+")
 _PAGE_NUMBER = re.compile(r"^(#|[ivxlcdm]+)$")
 # "## | chapter #: title" or "section title | ##"
 _NUMBERED_RUNNING = re.compile(r"^(#|[ivxlcdm]+)\s*[|·•—–]\s*\S|\S\s*[|·•—–]\s*(#|[ivxlcdm]+)$")
+# "## chapter #: title" / "title ##" without a separator: only for the page's outermost line
+_NUMBERED_EDGE = re.compile(r"^(#|[ivxlcdm]+) \S.{0,80}$|^\S.{0,80} (#|[ivxlcdm]+)$")
 
 
 class FurnitureModel(BaseModel):
@@ -57,8 +59,14 @@ def build_furniture(pages: Sequence[RawPage], body_size: float) -> FurnitureMode
 
 
 def is_furniture(
-    block: RawBlock, page_height: float, model: FurnitureModel, body_size: float
+    block: RawBlock,
+    page_height: float,
+    model: FurnitureModel,
+    body_size: float,
+    *,
+    edge: bool = False,
 ) -> bool:
+    """``edge``: the block is the page's top-most or bottom-most text block."""
     if block.kind != "text" or not _in_band(block, page_height):
         return False
     if _max_size(block) > body_size * HEADING_RATIO:  # chapter title at the top of a page
@@ -68,4 +76,5 @@ def is_furniture(
         norm in model.texts
         or bool(_PAGE_NUMBER.match(norm))
         or bool(_NUMBERED_RUNNING.search(norm))
+        or (edge and len(block.lines) <= 2 and bool(_NUMBERED_EDGE.match(norm)))
     )

@@ -102,3 +102,91 @@ def test_table_region_from_caption(make_pdf: MakePdf, lorem: str) -> None:
     table = page.blocks[1]
     assert table.bbox[3] >= 135
     assert all("Aggregate" not in b.text for b in page.blocks)
+
+
+def test_crop_marks_larger_than_page_do_not_swallow_text(make_pdf: MakePdf, lorem: str) -> None:
+    # Print-ready PDFs (e.g. Clean Code) carry stroke-only trim/crop marks that extend past the
+    # page edges; they must not become a page-sized figure that swallows all the text.
+    def draw(page: Any) -> None:
+        w, h = page.rect.width, page.rect.height
+        page.draw_rect(pymupdf.Rect(-38, -8, w + 38, h + 46), color=(0, 0, 0), fill=None)
+        page.draw_polyline(
+            [(-38, -8), (w + 38, -8), (w + 38, h + 46), (-38, h + 46), (-38, -8)],
+            color=(0, 0, 0),
+        )
+        page.insert_textbox(pymupdf.Rect(50, 80, 545, 400), lorem, fontname="tiro", fontsize=10)
+
+    page = _extract(make_pdf, lorem, draw)
+
+    types = _types(page)
+    assert BlockType.IMAGE not in types
+    assert BlockType.TABLE not in types
+    assert types.count(BlockType.PARAGRAPH) >= 2
+    assert not any(b.aside for b in page.blocks)
+
+
+def test_page_wide_listing_box_keeps_code_and_prose(make_pdf: MakePdf, lorem: str) -> None:
+    # A drawn listing frame covering most of the page, holding code and a few prose lines,
+    # is running text: code stays CODE, prose stays PARAGRAPH, nothing becomes a figure.
+    code = "\n".join(f"    int value{i} = compute({i});" for i in range(14))
+
+    def draw(page: Any) -> None:
+        page.draw_rect(pymupdf.Rect(30, 40, 565, 580), color=(0, 0, 0), fill=None)
+        page.insert_text((60, 70), code, fontname="cour", fontsize=8)
+        page.insert_textbox(
+            pymupdf.Rect(50, 300, 545, 360), lorem[:300], fontname="tiro", fontsize=10
+        )
+
+    page = _extract(make_pdf, lorem, draw)
+
+    types = _types(page)
+    assert BlockType.IMAGE not in types
+    assert BlockType.CODE in types
+    assert "value13" in next(b.text for b in page.blocks if b.type == BlockType.CODE)
+
+
+def test_large_vector_diagram_with_small_labels_is_still_a_figure(
+    make_pdf: MakePdf, lorem: str
+) -> None:
+    def draw(page: Any) -> None:
+        page.draw_rect(pymupdf.Rect(40, 60, 555, 560), color=(0, 0, 0), fill=None)
+        for row in range(5):
+            y = 90 + row * 90
+            page.draw_rect(pymupdf.Rect(80, y, 220, y + 50), color=(0, 0, 0))
+            page.draw_rect(pymupdf.Rect(360, y, 500, y + 50), color=(0, 0, 0))
+            page.draw_line((220, y + 25), (360, y + 25), color=(0, 0, 0))
+            page.insert_text((95, y + 28), f"Node {row}", fontname="helv", fontsize=7)
+            page.insert_text((375, y + 28), f"Replica {row}", fontname="helv", fontsize=7)
+
+    page = _extract(make_pdf, lorem, draw)
+
+    images = [b for b in page.blocks if b.type == BlockType.IMAGE]
+    assert len(images) == 1
+    x0, y0, x1, y1 = images[0].bbox
+    assert x0 <= 40 and y0 <= 60 and x1 >= 555 and y1 >= 560
+
+
+CLEAN_CODE = Path.home() / "SSD/Books/clean_code.pdf"
+
+
+def test_clean_code_pages_keep_their_text() -> None:
+    import pytest
+
+    if not CLEAN_CODE.is_file():
+        pytest.skip("Clean Code PDF not available")
+    doc = open_book(CLEAN_CODE)
+    meta = extract_book_meta(doc)
+    for page_1 in (49, 157):  # crop marks; crop marks + a page-wide listing frame
+        page = extract_page(doc, page_1 - 1, meta)
+        area = page.width * page.height
+        big = [
+            b
+            for b in page.blocks
+            if b.type in (BlockType.IMAGE, BlockType.TABLE)
+            and (b.bbox[2] - b.bbox[0]) * (b.bbox[3] - b.bbox[1]) > 0.5 * area
+        ]
+        assert not big, page_1
+        assert any(b.translatable for b in page.blocks), page_1
+    p49 = extract_page(doc, 48, meta)
+    assert any(b.type == BlockType.HEADING and "Intention-Revealing" in b.text for b in p49.blocks)
+    assert any(b.type == BlockType.CODE for b in p49.blocks)

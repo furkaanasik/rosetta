@@ -26,6 +26,9 @@ MARKER_MAX = 14.0  # small vector glyphs (list numbers, code callouts)
 SWALLOW_RATIO = 0.70
 CODE_BOX_MONO = 0.60
 TABLE_GAP = 12.0
+PAGE_FRAME_SHARE = 0.85  # stroke-only paths this big are crop/trim marks or page frames
+LARGE_REGION_SHARE = 0.50  # a cluster this big full of body prose is page text, not a figure
+PROSE_PAGE_LINES = 8
 
 TABLE_CAPTION = re.compile(r"^Table\s+[\dA-Z]+[-.\d]*")
 
@@ -101,6 +104,21 @@ def _is_prose_box(blocks: Sequence[RawBlock], stats: TypographyStats, width: flo
     return total > 0 and prose_chars / total >= 0.6
 
 
+def _is_running_text(blocks: Sequence[RawBlock], stats: TypographyStats) -> bool:
+    """Many lines of body-size prose and/or code listings: page text, never figure labels
+    (figure labels are few and set smaller than the body)."""
+    lines = readable = total = 0
+    for b in blocks:
+        for ln in b.lines:
+            for s in ln.spans:
+                n = len(s.text.strip())
+                total += n
+                if is_monospace(s.font, s.flags) or s.size >= stats.body_size * 0.85:
+                    readable += n
+            lines += 1
+    return lines >= PROSE_PAGE_LINES and total > 0 and readable / total >= 0.8
+
+
 def _is_table_body(block: RawBlock, stats: TypographyStats) -> bool:
     font, size = _dominant(block)
     if is_monospace(font):
@@ -170,7 +188,8 @@ def analyze_figures(page: RawPage, stats: TypographyStats) -> FigureAnalysis:
     rects = [
         d.rect
         for d in page.drawings
-        if not any(overlap_ratio(d.rect, r.bbox) > 0.5 for r in result.regions)
+        if not (d.stroked and not d.filled and area(d.rect) >= page_area * PAGE_FRAME_SHARE)
+        and not any(overlap_ratio(d.rect, r.bbox) > 0.5 for r in result.regions)
     ]
     for cl in _cluster(rects, DRAWING_TOLERANCE):
         w, h = cl[2] - cl[0], cl[3] - cl[1]
@@ -193,6 +212,10 @@ def analyze_figures(page: RawPage, stats: TypographyStats) -> FigureAnalysis:
             total = sum(_block_chars(blocks[i])[1] for i in inside)
             if total and mono / total >= CODE_BOX_MONO:
                 continue  # code background
+            if area(cl) >= page_area * LARGE_REGION_SHARE and _is_running_text(
+                [blocks[i] for i in inside], stats
+            ):
+                continue  # page-wide frame/listing box around running text: keep the text
             if _is_prose_box([blocks[i] for i in inside], stats, w):
                 result.aside.update(inside)
                 continue

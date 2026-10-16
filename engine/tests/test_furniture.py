@@ -46,3 +46,27 @@ def test_large_title_in_top_band_is_not_furniture(make_pdf: MakePdf) -> None:
 
 def test_normalize() -> None:
     assert normalize("70 |  Chapter 3:\nData") == "# | chapter #: data"
+
+
+def test_running_header_without_separator_on_outermost_line(make_pdf, lorem) -> None:  # type: ignore[no-untyped-def]
+    # Clean Code style: "18 Chapter 2: Meaningful Names" at the top, no "|" separator,
+    # different on every chapter (so the repeat rule can't learn it).
+    from rosetta_engine.extract.extractor import extract_book_meta, extract_page
+    from rosetta_engine.extract.pdf_reader import open_book
+    from rosetta_engine.models import BlockType
+
+    def fill(doc) -> None:  # type: ignore[no-untyped-def]
+        for n, title in enumerate(("Chapter 2: Meaningful Names", "Chapter 3: Functions")):
+            page = doc.new_page()
+            page.insert_text((50, 40), f"{18 + n}  {title}", fontname="tibo", fontsize=10)
+            page.insert_textbox(
+                pymupdf.Rect(50, 80, 545, 700), lorem * 2, fontname="tiro", fontsize=10
+            )
+
+    doc = open_book(make_pdf(fill, "hdr.pdf"))
+    meta = extract_book_meta(doc)
+    for n in range(2):
+        page = extract_page(doc, n, meta)
+        furniture = [b for b in page.blocks if b.type == BlockType.FURNITURE]
+        assert any("Chapter" in b.text for b in furniture)
+        assert not any("Chapter" in b.text for b in page.blocks if b.translatable)

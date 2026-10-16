@@ -46,7 +46,7 @@ from rosetta_engine.extract.text_clean import (
 )
 from rosetta_engine.models import TRANSLATABLE, BBox, Block, BlockType, PageBlocks, text_hash
 
-EXTRACTOR_VERSION = 2  # 2: vector callout markers (❶ in code, numbered list markers)
+EXTRACTOR_VERSION = 3  # 2: vector callout markers; 3: ignore crop marks / page-wide frames
 
 CODE_MERGE_GAP = 16.0  # consecutive code blocks closer than this are one listing
 DROP_CAP_RATIO = 2.0
@@ -281,10 +281,18 @@ def extract_page(doc: pymupdf.Document, page_no: int, meta: BookMeta) -> PageBlo
         )
     stats = meta.stats
     texts = raw.text_blocks
+    edges = (
+        {
+            min(range(len(texts)), key=lambda i: texts[i].bbox[1]),
+            max(range(len(texts)), key=lambda i: texts[i].bbox[3]),
+        }
+        if texts
+        else set()
+    )
     furniture_idx = {
         i
         for i, b in enumerate(texts)
-        if is_furniture(b, raw.height, meta.furniture, stats.body_size)
+        if is_furniture(b, raw.height, meta.furniture, stats.body_size, edge=i in edges)
     }
     figs = analyze_figures(raw, stats)
 

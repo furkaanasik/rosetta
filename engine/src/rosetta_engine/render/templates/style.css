@@ -87,5 +87,11 @@ aside.footnotes { margin-top: 2.5rem; padding-top: .8rem; border-top: 1px solid 
 .mode-learn .w { cursor: pointer; border-radius: 2px; }
 .mode-learn .w:hover { background: var(--hl); }
 .mode-learn .w.picked { outline: 1px solid var(--accent); }
-ruby.unknown { ruby-position: over; text-decoration: underline dotted var(--unknown); }
-ruby.unknown rt { font: 600 .62em var(--sans); color: var(--unknown); letter-spacing: 0; }
+ruby.unknown { ruby-position: over; ruby-align: center; text-decoration: underline dotted var(--unknown); }
+ruby.unknown rt { font: 600 .62em/1 var(--sans); color: var(--unknown); letter-spacing: 0; text-transform: none; }
+/* Headings: the meaning stays a small label above the word, not heading-sized. */
+:is(h1, h2, h3, h4, h5, h6) ruby.unknown rt { font-size: max(.5em, 9px); font-weight: 500; }
+/* Room for the ruby line so it never collides with the line above. */
+.mode-learn :is(p, li, figcaption) { line-height: 1.9; }
+.mode-learn :is(h1, h2, h3, h4, h5, h6) { line-height: 1.5; }
+.h-label { display: block; font: 600 .45em/1.4 var(--sans); letter-spacing: .14em; text-transform: uppercase; opacity: .7; }

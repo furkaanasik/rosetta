@@ -61,6 +61,64 @@ export interface PageHtml {
   html: string;
   translated_blocks: number;
   translatable_blocks: number;
+  /** v2: union of the page's content blocks (furniture excluded), PDF points; null if unknown. */
+  content_box?: BBox | null;
+  /** v2: page size in PDF points and whether it has a text layer. */
+  width?: number;
+  height?: number;
+  has_text_layer?: boolean;
+}
+
+/** v2 `GET /api/books/{id}/html?pages=59-61`: up to 10 page fragments in one request. */
+export interface PagesHtml {
+  pages: PageHtml[];
+}
+
+/** v2 `GET /api/books/{id}/pages/{n}/estimate_hint`: display-only cost hint for an
+ * untranslated sheet. No confirm token and no AI call — translating still needs
+ * `estimateTranslate` → CostModal → `translate`. */
+export interface EstimateHint {
+  page: number;
+  provider: string;
+  model: string;
+  calls: number;
+  input_tokens: number;
+  output_tokens: number;
+  usd: number;
+  price_known: boolean;
+  thinking: string | null;
+  total_blocks: number;
+  cached_blocks: number;
+  has_text_layer: boolean;
+  /** Rough wall-clock guess in seconds (0 when nothing to translate). */
+  seconds_hint: number;
+}
+
+/** v2 `GET /api/books/{id}/pages`: cheap per-page geometry + status for the virtual list. */
+export interface PageInfo {
+  page: number;
+  /** PDF points. */
+  width: number;
+  height: number;
+  /** From the DB once extracted, else "the page uses a font" (cheap; same answer in practice). */
+  has_text_layer: boolean;
+  /** Fully translated ('done') for the default lang/provider/model. */
+  translated: boolean;
+  /** null when the page hasn't been extracted yet. */
+  translatable_blocks: number | null;
+}
+
+/** v2 `GET /api/books`: library entry, most recently opened first. */
+export interface LibraryBook {
+  id: number;
+  title: string;
+  page_count: number;
+  file_path: string;
+  file_exists: boolean;
+  last_opened_at: string | null;
+  last_page: number | null;
+  translated_pages: number;
+  cover_url: string | null;
 }
 
 export interface Estimate {

@@ -2,6 +2,7 @@ import type {
   BookInfo,
   BookProfile,
   Estimate,
+  EstimateHint,
   Explanation,
   ExplainRequest,
   ExportRequest,
@@ -10,9 +11,11 @@ import type {
   Job,
   JobEstimateRequest,
   LearnStats,
+  LibraryBook,
   LookupResult,
   PageBlocks,
   PageHtml,
+  PageInfo,
   Rating,
   ReviewCard,
   TermInfo,
@@ -42,6 +45,20 @@ export interface EngineApi {
   assetBlob(bookId: number, name: string): Promise<Blob>;
   /** The PDF bytes (browser dev mode, where the file path can't be loaded directly); null if unavailable. */
   bookFile(bookId: number): Promise<ArrayBuffer | null>;
+
+  // v2 (reader redesign) — none of these call an AI.
+  /** Library: recently opened books, newest first. */
+  listBooks(): Promise<LibraryBook[]>;
+  /** Size + translation status of every page (no extraction). */
+  pages(bookId: number): Promise<PageInfo[]>;
+  /** Remember the reading position (also bumps last_opened_at). */
+  saveProgress(bookId: number, page: number): Promise<void>;
+  /** Cover thumbnail PNG, fetched with the bearer token. */
+  coverBlob(bookId: number, width?: number): Promise<Blob>;
+  /** Up to 10 page fragments at once (1-based pages; any order, returned sorted). */
+  pagesHtml(bookId: number, pages: number[], mode: HtmlMode, lang?: string): Promise<PageHtml[]>;
+  /** Display-only cost hint for an untranslated sheet — issues no confirm token, never runs AI. */
+  estimateHint(bookId: number, page: number): Promise<EstimateHint>;
 
   estimateTranslate(bookId: number, req: TranslateEstimateRequest): Promise<Estimate>;
   translate(bookId: number, confirmToken: string): Promise<TranslationReport>;

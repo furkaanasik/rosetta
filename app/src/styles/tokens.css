@@ -1,0 +1,149 @@
+/* Rosetta design tokens (docs/ui-redesign.md §4). Light by default; dark via
+   prefers-color-scheme unless the user forced a theme with <html data-theme>. */
+:root {
+  color-scheme: light;
+  --canvas: #f4f1ea;
+  --canvas-2: #ece8de;
+  --sheet: #fffdf8;
+  --sheet-edge: rgba(60, 45, 20, 0.1);
+  --ink: #1e1b16;
+  --ink-2: #5e574b;
+  --ink-3: #8f8778;
+  --surface: rgba(255, 253, 248, 0.82);
+  --surface-solid: #fbf9f3;
+  --raised: #fffdf8;
+  --line: rgba(30, 27, 22, 0.08);
+  --line-strong: rgba(30, 27, 22, 0.16);
+  --hover: rgba(30, 27, 22, 0.05);
+  --press: rgba(30, 27, 22, 0.08);
+  --accent: #b4532a;
+  --accent-hover: #a14824;
+  --accent-ink: #fffaf5;
+  --accent-soft: rgba(180, 83, 42, 0.1);
+  --accent-line: rgba(180, 83, 42, 0.32);
+  --sage: #5e7a63;
+  --sage-soft: rgba(94, 122, 99, 0.12);
+  --amber: #b7862b;
+  --amber-soft: rgba(183, 134, 43, 0.12);
+  --danger: #b3412f;
+  --danger-soft: rgba(179, 65, 47, 0.1);
+  --code-bg: #f1ece2;
+  --scrim: rgba(28, 22, 12, 0.28);
+
+  --shadow-sheet: 0 1px 2px rgba(40, 30, 15, 0.06), 0 8px 24px -8px rgba(40, 30, 15, 0.12);
+  --shadow-float: 0 1px 2px rgba(40, 30, 15, 0.06), 0 12px 32px -10px rgba(40, 30, 15, 0.2);
+  --shadow-dialog: 0 2px 6px rgba(40, 30, 15, 0.08), 0 28px 64px -16px rgba(40, 30, 15, 0.3);
+
+  --font-ui: "Geist Variable", "Geist", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-read: "Literata Variable", "Literata", "Iowan Old Style", Georgia, serif;
+  --font-mono: "Geist Mono Variable", "Geist Mono", ui-monospace, "JetBrains Mono", monospace;
+
+  --text-2xs: 11px;
+  --text-xs: 12.5px;
+  --text-sm: 13.5px;
+  --text-md: 15px;
+  --text-lg: 18px;
+  --text-xl: 24px;
+  --text-2xl: 32px;
+
+  --s1: 4px;
+  --s2: 8px;
+  --s3: 12px;
+  --s4: 16px;
+  --s5: 24px;
+  --s6: 32px;
+  --s7: 48px;
+  --s8: 64px;
+
+  --r-btn: 8px;
+  --r-input: 8px;
+  --r-pop: 12px;
+  --r-panel: 16px;
+  --r-dialog: 20px;
+
+  --ease: cubic-bezier(0.32, 0.72, 0, 1);
+  --t-in: 220ms;
+  --t-out: 140ms;
+  --t-fast: 120ms;
+
+  --chrome-h: 56px;
+  --panel-w: 380px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --canvas: #141311;
+    --canvas-2: #1a1916;
+    --sheet: #1d1b18;
+    --sheet-edge: rgba(255, 255, 255, 0.07);
+    --ink: #ece7dd;
+    --ink-2: #a79f92;
+    --ink-3: #7c7569;
+    --surface: rgba(29, 27, 24, 0.8);
+    --surface-solid: #1f1d1a;
+    --raised: #24221e;
+    --line: rgba(236, 231, 221, 0.08);
+    --line-strong: rgba(236, 231, 221, 0.16);
+    --hover: rgba(236, 231, 221, 0.06);
+    --press: rgba(236, 231, 221, 0.1);
+    --accent: #e0875c;
+    --accent-hover: #e99a73;
+    --accent-ink: #1a120d;
+    --accent-soft: rgba(224, 135, 92, 0.14);
+    --accent-line: rgba(224, 135, 92, 0.38);
+    --sage: #8fb096;
+    --sage-soft: rgba(143, 176, 150, 0.14);
+    --amber: #d8ae58;
+    --amber-soft: rgba(216, 174, 88, 0.14);
+    --danger: #e07767;
+    --danger-soft: rgba(224, 119, 103, 0.14);
+    --code-bg: #24211d;
+    --scrim: rgba(0, 0, 0, 0.5);
+    --shadow-sheet: 0 0 0 1px var(--sheet-edge), inset 0 1px 0 rgba(255, 255, 255, 0.03);
+    --shadow-float: 0 0 0 1px var(--line), 0 16px 40px -12px rgba(0, 0, 0, 0.6);
+    --shadow-dialog: 0 0 0 1px var(--line), 0 32px 72px -16px rgba(0, 0, 0, 0.7);
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --canvas: #141311;
+  --canvas-2: #1a1916;
+  --sheet: #1d1b18;
+  --sheet-edge: rgba(255, 255, 255, 0.07);
+  --ink: #ece7dd;
+  --ink-2: #a79f92;
+  --ink-3: #7c7569;
+  --surface: rgba(29, 27, 24, 0.8);
+  --surface-solid: #1f1d1a;
+  --raised: #24221e;
+  --line: rgba(236, 231, 221, 0.08);
+  --line-strong: rgba(236, 231, 221, 0.16);
+  --hover: rgba(236, 231, 221, 0.06);
+  --press: rgba(236, 231, 221, 0.1);
+  --accent: #e0875c;
+  --accent-hover: #e99a73;
+  --accent-ink: #1a120d;
+  --accent-soft: rgba(224, 135, 92, 0.14);
+  --accent-line: rgba(224, 135, 92, 0.38);
+  --sage: #8fb096;
+  --sage-soft: rgba(143, 176, 150, 0.14);
+  --amber: #d8ae58;
+  --amber-soft: rgba(216, 174, 88, 0.14);
+  --danger: #e07767;
+  --danger-soft: rgba(224, 119, 103, 0.14);
+  --code-bg: #24211d;
+  --scrim: rgba(0, 0, 0, 0.5);
+  --shadow-sheet: 0 0 0 1px var(--sheet-edge), inset 0 1px 0 rgba(255, 255, 255, 0.03);
+  --shadow-float: 0 0 0 1px var(--line), 0 16px 40px -12px rgba(0, 0, 0, 0.6);
+  --shadow-dialog: 0 0 0 1px var(--line), 0 32px 72px -16px rgba(0, 0, 0, 0.7);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --t-in: 0ms;
+    --t-out: 0ms;
+    --t-fast: 0ms;
+  }
+}

@@ -3,6 +3,9 @@ import { useLatest } from "../lib/useLatest";
 import type { EngineApi } from "../api/engine";
 import type { Estimate, Job } from "../api/types";
 import { stopReasonText, usd } from "../lib/format";
+import { ArrowClockwise, Pause, Play, Plug, Stack, X } from "@phosphor-icons/react";
+import { Badge, Button, EmptyState, Progress } from "../ui";
+import { compressPages, percent, relativeTime } from "../ui/text";
 
 const STATUS: Record<Job["status"], string> = {
   pending: "Bekliyor",
@@ -11,6 +14,15 @@ const STATUS: Record<Job["status"], string> = {
   done: "Bitti",
   failed: "Hatalı",
   cancelled: "İptal",
+};
+
+const TONE: Record<Job["status"], "neutral" | "accent" | "sage" | "amber" | "danger"> = {
+  pending: "neutral",
+  running: "accent",
+  paused: "amber",
+  done: "sage",
+  failed: "danger",
+  cancelled: "neutral",
 };
 
 const POLL_MS = 1500;
@@ -85,59 +97,94 @@ export function JobsPanel({ api, bookId, refreshKey, requestConfirmed, onProgres
   };
   const act = (p: Promise<unknown>) => void p.then(load, onError);
 
-  if (!api) return <section className="panel"><p className="muted">Motor bağlı değil.</p></section>;
+  if (!api)
+    return (
+      <section className="panel" aria-label="Toplu işler">
+        <EmptyState size="compact" icon={<Plug />} title="Motor bağlı değil" />
+      </section>
+    );
 
   return (
     <section className="panel" aria-label="Toplu işler">
-      <h3>Toplu işler</h3>
-      {jobs.length === 0 && <p className="muted">İş yok. "Aralık Çevir" veya "Tüm Kitabı Çevir" ile başlatın.</p>}
+      {jobs.length === 0 && (
+        <EmptyState size="compact" icon={<Stack />} title="Henüz çeviri işi yok">
+          Bir aralığı ya da tüm kitabı <strong>Çevir ▾</strong> menüsünden başlatın; ilerleme burada görünür.
+        </EmptyState>
+      )}
       {jobs.map((j) => {
         const total = j.pages.length || 1;
-        const pct = Math.round((j.done_pages.length / total) * 100);
         const failed = Object.entries(j.failed_pages);
+        const tone = TONE[j.status];
         return (
           <article key={j.id} className="job">
-            <header>
-              <strong>İş #{j.id}</strong> <span className={`badge ${j.status}`}>{STATUS[j.status]}</span>
+            <header className="job__head">
+              <div className="job__title">
+                <strong>Sayfa {compressPages(j.pages)}</strong>
+                <span className="job__sub">
+                  İş #{j.id}
+                  {j.created_at && ` · ${relativeTime(j.created_at)}`}
+                </span>
+              </div>
+              <Badge tone={tone}>{STATUS[j.status]}</Badge>
             </header>
-            <progress max={total} value={j.done_pages.length} aria-label={`İlerleme %${pct}`} />
-            <p className="small">
-              {j.done_pages.length}/{j.pages.length} sayfa · harcanan {usd(j.spent_usd)}
-              {j.budget_usd !== null && ` / bütçe ${usd(j.budget_usd)}`}
+            <Progress
+              value={j.done_pages.length}
+              max={total}
+              label={`İlerleme ${percent(j.done_pages.length, total)}`}
+              tone={j.status === "done" ? "sage" : j.status === "paused" ? "amber" : j.status === "failed" ? "danger" : "accent"}
+              indeterminate={j.status === "pending"}
+            />
+            <p className="job__meta num">
+              <span>
+                {j.done_pages.length}/{j.pages.length} sayfa
+              </span>
+              <span>
+                {usd(j.spent_usd)}
+                {j.budget_usd !== null && <span className="muted"> / {usd(j.budget_usd)} bütçe</span>}
+              </span>
             </p>
-            {j.stop_reason && <p className="small warn">{stopReasonText(j.stop_reason)}</p>}
+            {j.stop_reason && <p className="job__reason">{stopReasonText(j.stop_reason)}</p>}
             {failed.length > 0 && (
-              <details>
+              <details className="job__failed">
                 <summary>{failed.length} hatalı sayfa</summary>
-                <ul className="small">
+                <ul>
                   {failed.map(([p, r]) => (
                     <li key={p}>
-                      s.{p}: {r}
+                      <span className="num">s.{p}</span> {r}
                     </li>
                   ))}
                 </ul>
               </details>
             )}
-            <div className="row">
+            <div className="job__actions">
               {j.status === "running" && (
-                <button type="button" onClick={() => act(api.pauseJob(j.id))}>
+                <Button size="sm" icon={<Pause />} onClick={() => act(api.pauseJob(j.id))}>
                   Duraklat
-                </button>
+                </Button>
               )}
               {j.status === "paused" && (
-                <button type="button" onClick={() => requestConfirmed(() => api.estimateResumeJob(j.id), (t) => api.resumeJob(j.id, t), () => (watch(), void load()))}>
+                <Button
+                  size="sm"
+                  variant="primary"
+                  icon={<Play />}
+                  onClick={() => requestConfirmed(() => api.estimateResumeJob(j.id), (t) => api.resumeJob(j.id, t), () => (watch(), void load()))}
+                >
                   Devam
-                </button>
+                </Button>
               )}
               {failed.length > 0 && !active(j) && (
-                <button type="button" onClick={() => requestConfirmed(() => api.estimateRetryFailed(j.id), (t) => api.retryFailed(j.id, t), () => (watch(), void load()))}>
+                <Button
+                  size="sm"
+                  icon={<ArrowClockwise />}
+                  onClick={() => requestConfirmed(() => api.estimateRetryFailed(j.id), (t) => api.retryFailed(j.id, t), () => (watch(), void load()))}
+                >
                   Sadece hatalıları tekrar dene
-                </button>
+                </Button>
               )}
               {(active(j) || j.status === "paused") && (
-                <button type="button" onClick={() => act(api.cancelJob(j.id))}>
+                <Button size="sm" variant="ghost" icon={<X />} onClick={() => act(api.cancelJob(j.id))}>
                   İptal
-                </button>
+                </Button>
               )}
             </div>
           </article>

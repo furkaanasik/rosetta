@@ -83,3 +83,26 @@ export function pdfScrollFor(
   const fraction = box.height > 0 ? (translationScroll - box.top) / box.height : 0;
   return pdfYForBlock(block, Math.min(1, Math.max(0, fraction))) * scale;
 }
+
+/**
+ * The block under a click on the original page (PDF points). A block containing the point wins
+ * (the smallest one if they nest); otherwise the vertically nearest block within 24 pt.
+ */
+export function blockAtPoint(page: PageBlocks, x: number, y: number): BlockInfo | null {
+  const blocks = syncableBlocks(page);
+  const hits = blocks.filter((b) => x >= b.bbox[0] && x <= b.bbox[2] && y >= b.bbox[1] && y <= b.bbox[3]);
+  if (hits.length) {
+    const area = (b: BlockInfo) => (b.bbox[2] - b.bbox[0]) * (b.bbox[3] - b.bbox[1]);
+    return hits.reduce((a, b) => (area(b) < area(a) ? b : a));
+  }
+  let best: BlockInfo | null = null;
+  let bestD = 24;
+  for (const b of blocks) {
+    const d = y < b.bbox[1] ? b.bbox[1] - y : y > b.bbox[3] ? y - b.bbox[3] : 0;
+    if (d <= bestD) {
+      best = b;
+      bestD = d;
+    }
+  }
+  return best;
+}

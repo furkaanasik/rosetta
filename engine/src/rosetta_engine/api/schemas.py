@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from rosetta_engine.models import Book, CostEstimate, TranslationReport
 from rosetta_engine.store.learn_repo import VocabRow
-from rosetta_engine.store.repo import JobRow
+from rosetta_engine.store.repo import JobRow, LibraryRow
 
 Operation = Literal["translate", "job", "profile", "explain"]
 
@@ -19,6 +20,10 @@ class _Body(BaseModel):
 
 class OpenBookBody(_Body):
     path: str
+
+
+class ProgressBody(_Body):
+    page: int = Field(ge=1)
 
 
 class ConfirmBody(_Body):
@@ -84,6 +89,21 @@ def book_info(book: Book, path: str) -> dict[str, Any]:
         "title": book.title,
         "page_count": book.page_count,
         "path": path,
+    }
+
+
+def library_item(row: LibraryRow, translated_pages: int) -> dict[str, Any]:
+    path = row.book.file_path
+    return {
+        "id": row.book.id,
+        "title": row.book.title,
+        "page_count": row.book.page_count,
+        "file_path": path,
+        "file_exists": path is not None and Path(path).is_file(),
+        "last_opened_at": row.last_opened_at,
+        "last_page": row.last_page + 1 if row.last_page is not None else None,
+        "translated_pages": translated_pages,
+        "cover_url": f"/api/books/{row.book.id}/cover",
     }
 
 

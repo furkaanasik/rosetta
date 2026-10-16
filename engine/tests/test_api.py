@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import threading
 import time
@@ -856,3 +857,178 @@ def test_export_without_chromium(
         "unavailable",
         503,
     )
+
+
+# --- UI redesign v2: library, progress, cover, page overview, batch HTML, hints -----------------
+
+
+def test_library_lists_opened_books_most_recent_first(
+    client: TestClient, book_pdf: Path, two_column_pdf: Path
+) -> None:
+    assert ok(client.get("/api/books", headers=AUTH)) == []
+    a = open_book(client, book_pdf)
+    time.sleep(0.01)
+    b = open_book(client, two_column_pdf)
+
+    lib = ok(client.get("/api/books", headers=AUTH))
+    assert [x["id"] for x in lib] == [b["id"], a["id"]]
+    first = lib[1]
+    assert first["title"] and first["page_count"] == 3
+    assert first["file_path"] == str(book_pdf) and first["file_exists"] is True
+    assert first["last_opened_at"] and first["last_page"] is None
+    assert first["translated_pages"] == 0
+    assert first["cover_url"] == f"/api/books/{a['id']}/cover"
+
+    time.sleep(0.01)
+    saved = ok(client.put(f"/api/books/{a['id']}/progress", json={"page": 2}, headers=AUTH))
+    assert saved["last_page"] == 2 and saved["book_id"] == a["id"]
+    lib = ok(client.get("/api/books", headers=AUTH))
+    assert [x["id"] for x in lib] == [a["id"], b["id"]]
+    assert lib[0]["last_page"] == 2
+
+
+def test_library_shows_missing_file(client: TestClient, book_pdf: Path, tmp_path: Path) -> None:
+    moved = tmp_path / "moved.pdf"
+    shutil.copy(book_pdf, moved)
+    open_book(client, moved)
+    moved.unlink()
+    (item,) = ok(client.get("/api/books", headers=AUTH))
+    assert item["file_exists"] is False
+
+
+def test_progress_validation(client: TestClient, book_pdf: Path) -> None:
+    book = open_book(client, book_pdf)
+    url = f"/api/books/{book['id']}/progress"
+    err(client.put(url, json={"page": 4}, headers=AUTH), "bad_request", 400)
+    err(client.put(url, json={"page": 0}, headers=AUTH), "bad_request", 400)
+    err(client.put("/api/books/999/progress", json={"page": 1}, headers=AUTH), "not_found", 404)
+    err(client.put(url, json={"page": 1}), "unauthorized", 401)
+
+
+def test_translated_pages_counted_in_library(
+    client: TestClient, book_pdf: Path, translators: Translators
+) -> None:
+    book = open_book(client, book_pdf)
+    est = ok(client.post(f"/api/books/{book['id']}/estimate", json={"pages": [1]}, headers=AUTH))
+    ok(
+        client.post(
+            f"/api/books/{book['id']}/translate",
+            json={"confirm_token": est["confirm_token"]},
+            headers=AUTH,
+        )
+    )
+    (item,) = ok(client.get("/api/books", headers=AUTH))
+    assert item["translated_pages"] == 1
+
+
+def test_cover_png_cached_and_bearer_only(client: TestClient, book_pdf: Path, env: Path) -> None:
+    book = open_book(client, book_pdf)
+    url = f"/api/books/{book['id']}/cover"
+    err(client.get(url), "unauthorized", 401)
+    err(client.get(f"{url}?token={TOKEN}"), "unauthorized", 401)  # not the asset route
+    r = client.get(f"{url}?w=120", headers=AUTH)
+    assert r.status_code == 200 and r.headers["content-type"] == "image/png"
+    pix = pymupdf.Pixmap(r.content)
+    assert pix.width == 120
+    cached = list((env / "data" / "out").rglob("cover_w120.png"))
+    assert len(cached) == 1
+    assert client.get(f"{url}?w=120", headers=AUTH).content == r.content
+    err(client.get(f"{url}?w=10", headers=AUTH), "bad_request", 400)
+    err(client.get("/api/books/999/cover", headers=AUTH), "not_found", 404)
+
+
+def test_pages_overview_without_extraction(
+    client: TestClient, book_pdf: Path, translators: Translators
+) -> None:
+    book = open_book(client, book_pdf)
+    url = f"/api/books/{book['id']}/pages"
+    pages = ok(client.get(url, headers=AUTH))
+    assert [p["page"] for p in pages] == [1, 2, 3]
+    assert all(p["width"] > 0 and p["height"] > 0 for p in pages)
+    assert all(p["translated"] is False for p in pages)
+    assert all(p["has_text_layer"] is True for p in pages)  # from fonts, before extraction
+    assert all(p["translatable_blocks"] is None for p in pages)
+
+    ok(client.get(f"/api/books/{book['id']}/pages/2/blocks", headers=AUTH))
+    pages = ok(client.get(url, headers=AUTH))
+    assert pages[1]["has_text_layer"] is True and pages[1]["translatable_blocks"] > 0
+
+    est = ok(client.post(f"/api/books/{book['id']}/estimate", json={"pages": [2]}, headers=AUTH))
+    body = {"confirm_token": est["confirm_token"]}
+    ok(client.post(f"/api/books/{book['id']}/translate", json=body, headers=AUTH))
+    pages = ok(client.get(url, headers=AUTH))
+    assert [p["translated"] for p in pages] == [False, True, False]
+    assert translators.calls == 1
+
+
+def test_page_html_has_size_and_content_box(client: TestClient, book_pdf: Path) -> None:
+    book = open_book(client, book_pdf)
+    html = ok(client.get(f"/api/books/{book['id']}/pages/1/html", headers=AUTH))
+    assert html["width"] > 0 and html["height"] > 0 and html["has_text_layer"] is True
+    x0, y0, x1, y1 = html["content_box"]
+    assert 0 <= x0 < x1 <= html["width"]
+    assert 0 <= y0 < y1 <= html["height"]
+    blocks = ok(client.get(f"/api/books/{book['id']}/pages/1/blocks", headers=AUTH))["blocks"]
+    furniture = [b["bbox"] for b in blocks if b["type"] == "furniture"]
+    assert furniture  # the synthetic page has a header and a page number…
+    body_y1 = max(b["bbox"][3] for b in blocks if b["type"] != "furniture")
+    assert y1 == pytest.approx(body_y1, abs=0.01)  # …which the box ignores
+
+
+def test_batch_page_html(client: TestClient, book_pdf: Path) -> None:
+    book = open_book(client, book_pdf)
+    url = f"/api/books/{book['id']}/html"
+    out = ok(client.get(f"{url}?pages=1-2&mode=tr", headers=AUTH))
+    assert [p["page"] for p in out["pages"]] == [1, 2]
+    single = ok(client.get(f"/api/books/{book['id']}/pages/2/html", headers=AUTH))
+    assert out["pages"][1] == single
+    assert [p["page"] for p in ok(client.get(f"{url}?pages=3,1", headers=AUTH))["pages"]] == [1, 3]
+    err(client.get(f"{url}?pages=1-20", headers=AUTH), "bad_request", 400)
+    err(client.get(f"{url}?pages=a", headers=AUTH), "bad_request", 400)
+    err(client.get(f"{url}?pages=2-9", headers=AUTH), "bad_request", 400)  # out of range
+    err(client.get(url, headers=AUTH), "bad_request", 400)
+
+
+def test_estimate_hint_issues_no_token_and_calls_no_ai(
+    make_client: Callable[..., TestClient], book_pdf: Path, translators: Translators
+) -> None:
+    store = ConfirmStore()
+    client = make_client(confirm=store)
+    book = open_book(client, book_pdf)
+    hint = ok(client.get(f"/api/books/{book['id']}/pages/1/estimate_hint", headers=AUTH))
+    assert hint["calls"] == 1 and hint["total_blocks"] > 0 and hint["cached_blocks"] == 0
+    assert hint["has_text_layer"] is True and hint["seconds_hint"] > 0
+    assert "confirm_token" not in hint
+    assert store._entries == {}  # no token: translating still needs /estimate + confirm
+    assert translators.calls == 0
+
+    est = ok(client.post(f"/api/books/{book['id']}/estimate", json={"pages": [1]}, headers=AUTH))
+    body = {"confirm_token": est["confirm_token"]}
+    ok(client.post(f"/api/books/{book['id']}/translate", json=body, headers=AUTH))
+    calls = translators.calls
+    hint = ok(client.get(f"/api/books/{book['id']}/pages/1/estimate_hint", headers=AUTH))
+    assert hint["calls"] == 0 and hint["cached_blocks"] == hint["total_blocks"]
+    assert hint["seconds_hint"] == 0 and translators.calls == calls
+
+
+def test_learn_mode_keeps_figure_images(client: TestClient, book_pdf: Path) -> None:
+    book = open_book(client, book_pdf)
+    tr = ok(client.get(f"/api/books/{book['id']}/pages/1/html?mode=tr", headers=AUTH))["html"]
+    learn = ok(client.get(f"/api/books/{book['id']}/pages/1/html?mode=learn", headers=AUTH))
+    srcs = re.findall(r'<img [^>]*src="([^"]+)"', learn["html"])
+    assert srcs and srcs == re.findall(r'<img [^>]*src="([^"]+)"', tr)
+    assert all(s.startswith("assets/") for s in srcs)
+    assert ">[image]<" not in learn["html"]
+
+
+def test_pages_overview_flags_page_without_text(
+    client: TestClient, make_pdf: Callable[..., Path]
+) -> None:
+    def fill(doc: Any) -> None:
+        doc.new_page().insert_text((72, 72), "Some text", fontname="tiro", fontsize=11)
+        blank = doc.new_page()
+        blank.draw_rect(pymupdf.Rect(72, 72, 300, 300), color=(0, 0, 0), fill=(0.5, 0.5, 0.5))
+
+    book = open_book(client, make_pdf(fill, "scan.pdf"))
+    pages = ok(client.get(f"/api/books/{book['id']}/pages", headers=AUTH))
+    assert [p["has_text_layer"] for p in pages] == [True, False]

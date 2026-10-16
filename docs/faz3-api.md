@@ -56,6 +56,21 @@ iptal), kitap profili (oku, yaz, analiz tahmini, analiz), PDF dışa aktarma, ö
 kelime defteri, sırası gelen kartlar, değerlendirme, istatistik, terimler), "Bunu açıkla" ve
 kullanım toplamları. Sayfa numaraları API'de 1 tabanlıdır.
 
+### v2 (okuyucu yeniden tasarımı) — hepsi AI'sız ve token korumalı
+- `GET /api/books`: kitaplık (son açılan önce; kapak yolu, kaldığı sayfa, çevrilmiş sayfa sayısı,
+  dosya hâlâ yerinde mi). `PUT /api/books/{id}/progress {page}`: kaldığı yer. Migration 006
+  `books.last_opened_at`, `books.last_page` ekler; kitap açılınca `last_opened_at` güncellenir.
+- `GET /api/books/{id}/cover?w=240`: kapak PNG'si (genişlik başına önbellek, yalnız Bearer).
+- `GET /api/books/{id}/pages`: tüm sayfaların boyutu, metin katmanı, çevrilebilir blok sayısı
+  (çıkarılmamışsa null) ve çeviri durumu; çıkarma yapmaz (~0.1 sn / 670 sayfa).
+- Sayfa HTML yanıtına `width`, `height`, `has_text_layer`, `content_box [x0,y0,x1,y1]` eklendi;
+  `GET /api/books/{id}/html?pages=59-61` en çok 10 sayfayı tek istekte döndürür.
+- `GET /api/books/{id}/pages/{n}/estimate_hint`: çevrilmemiş kâğıttaki "≈ $" gösterimi için
+  tahmin. **Onay belirteci üretmez, AI çağırmaz** (testle kilitli); çevirmek yine
+  `/estimate` → onay → `/translate` ister.
+- HTML: bölüm başlıklarında "CHAPTER 1"/"BÖLÜM 1" etiketi `<span class="h-label">`; öğrenme
+  modunda ruby yalnız kelimeyi sarar, başlıklarda küçük kalır (CSS).
+
 ## Geliştirme / E2E modu
 
 `ROSETTA_DATA_DIR=<geçici dizin> rosetta serve --dev-fake-ai [--dev-fake-delay SN]` (gizli

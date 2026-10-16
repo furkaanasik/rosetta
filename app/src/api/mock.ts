@@ -5,6 +5,7 @@ import {
   type BookInfo,
   type BookProfile,
   type Estimate,
+  type EstimateHint,
   type Explanation,
   type ExplainRequest,
   type ExportRequest,
@@ -13,9 +14,11 @@ import {
   type Job,
   type JobEstimateRequest,
   type LearnStats,
+  type LibraryBook,
   type LookupResult,
   type PageBlocks,
   type PageHtml,
+  type PageInfo,
   type Rating,
   type ReviewCard,
   type TermInfo,
@@ -214,11 +217,88 @@ export class MockEngineApi implements EngineApi {
       html: `<article class="page">${parts.join("\n")}</article>`,
       translated_blocks: done ? 3 : 0,
       translatable_blocks: 3,
+      content_box: [72, 72, 432, 72 + SAMPLE.reduce((h, b) => h + b.h + 18, 0)],
+      width: PAGE_W,
+      height: PAGE_H,
+      has_text_layer: true,
+    });
+  }
+
+  async pagesHtml(bookId: number, pages: number[], mode: HtmlMode): Promise<PageHtml[]> {
+    const wanted = [...new Set(pages)].sort((a, b) => a - b);
+    if (wanted.length > 10) throw new EngineError("bad_request", "Tek istekte en çok 10 sayfa", 400);
+    return Promise.all(wanted.map((p) => this.pageHtml(bookId, p, mode)));
+  }
+
+  estimateHint(bookId: number, page: number): Promise<EstimateHint> {
+    this.requireBook(bookId);
+    const todo = this.translated.has(page) ? 0 : 3;
+    return this.delay({
+      page,
+      provider: "mock",
+      model: "mock",
+      calls: todo ? 1 : 0,
+      input_tokens: todo * 400,
+      output_tokens: todo * 500,
+      usd: todo * 0.004,
+      price_known: true,
+      thinking: null,
+      total_blocks: 3,
+      cached_blocks: 3 - todo,
+      has_text_layer: true,
+      seconds_hint: todo ? 10 : 0,
     });
   }
 
   bookFile(_bookId: number): Promise<ArrayBuffer | null> {
     return Promise.resolve(null);
+  }
+
+  /** Last reading position per book (v2 progress). */
+  lastPage: number | null = null;
+  private openedAt: string | null = null;
+
+  listBooks(): Promise<LibraryBook[]> {
+    const b = this.book;
+    if (!b) return this.delay([]);
+    return this.delay([
+      {
+        id: b.id,
+        title: b.title,
+        page_count: b.page_count,
+        file_path: b.path,
+        file_exists: true,
+        last_opened_at: this.openedAt,
+        last_page: this.lastPage,
+        translated_pages: this.translated.size,
+        cover_url: `/api/books/${b.id}/cover`,
+      },
+    ]);
+  }
+
+  pages(bookId: number): Promise<PageInfo[]> {
+    const b = this.requireBook(bookId);
+    return this.delay(
+      Array.from({ length: b.page_count }, (_, i) => ({
+        page: i + 1,
+        width: PAGE_W,
+        height: PAGE_H,
+        has_text_layer: true,
+        translated: this.translated.has(i + 1),
+        translatable_blocks: 3,
+      })),
+    );
+  }
+
+  saveProgress(bookId: number, page: number): Promise<void> {
+    this.requireBook(bookId);
+    this.lastPage = page;
+    this.openedAt = new Date().toISOString();
+    return this.delay(undefined);
+  }
+
+  coverBlob(bookId: number, _width?: number): Promise<Blob> {
+    return this.assetBlob(bookId, "cover.png");
   }
 
   assetBlob(_bookId: number, _name: string): Promise<Blob> {

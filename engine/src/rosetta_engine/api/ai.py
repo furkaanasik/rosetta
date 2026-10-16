@@ -128,6 +128,45 @@ def translate_estimate(book_id: int, body: TranslateEstimateBody, eng: Engine) -
     return _plan_estimate(eng, token, "translate", plan, p, t)
 
 
+def _seconds_hint(calls: int, output_tokens: int) -> int:
+    """Very rough wall-clock guess for display only (≈70 output tok/s + call overhead)."""
+    return 0 if calls == 0 else round(calls * 4 + output_tokens / 70)
+
+
+@router.get("/books/{book_id}/pages/{page}/estimate_hint")
+def estimate_hint(book_id: int, page: int, eng: Engine, lang: str | None = None) -> dict[str, Any]:
+    """Display-only cost hint for an untranslated page sheet.
+
+    Same ``plan()`` as ``/estimate`` (extraction + cache lookup, never the provider), but it
+    issues **no confirm token**: translating still requires ``/estimate`` → user confirmation.
+    """
+    p = _provider(eng, None, None)
+    with eng.db() as s:
+        ob = eng.book(s, book_id)
+        pages = eng.check_pages(ob, [page])
+        svc, t = _service(eng, s, p)
+        profile = _profile(s, book_id, t)
+        target = lang or eng.settings.default_lang
+        with ob.lock:
+            plan = svc.plan(ob.book, ob.doc, ob.meta, pages, target, profile=profile)
+    cost = plan.estimate
+    return {
+        "page": page,
+        "provider": t.name,
+        "model": t.model,
+        "calls": cost.calls,
+        "input_tokens": cost.input_tokens,
+        "output_tokens": cost.output_tokens,
+        "usd": round(cost.usd, 6),
+        "price_known": cost.price_known,
+        "thinking": p.thinking,
+        "total_blocks": plan.total_blocks,
+        "cached_blocks": plan.cached_blocks,
+        "has_text_layer": not plan.no_text_pages,
+        "seconds_hint": _seconds_hint(cost.calls, cost.output_tokens),
+    }
+
+
 @router.post("/books/{book_id}/translate")
 def translate(book_id: int, body: ConfirmBody, eng: Engine) -> dict[str, Any]:
     scope = f"book:{book_id}"

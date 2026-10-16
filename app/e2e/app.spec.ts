@@ -23,13 +23,30 @@ async function confirmCost(p: Page): Promise<void> {
   await expect(modal).toBeHidden({ timeout: 30_000 });
 }
 
-async function mode(p: Page, label: string): Promise<void> {
+async function mode(p: Page, label: "Orijinal" | "Yan yana" | "Türkçe" | "Öğrenme"): Promise<void> {
   await p.getByRole("tablist", { name: "Görünüm modu" }).getByRole("tab", { name: label }).click();
 }
 
-async function panel(p: Page, label: string): Promise<void> {
-  await p.getByRole("tablist", { name: "Paneller" }).getByRole("tab", { name: label }).click();
+/** Opens the side panel on a tab. */
+async function panel(p: Page, label: "İçindekiler" | "İşler" | "Kelimeler" | "Profil"): Promise<void> {
+  const side = p.locator("aside.side-panel");
+  if ((await side.getAttribute("data-open")) !== "true") await p.getByRole("button", { name: "Yan panel" }).click();
+  await side.getByRole("tablist", { name: "Paneller" }).getByRole("tab", { name: label }).click();
 }
+
+async function closePanel(p: Page): Promise<void> {
+  const side = p.locator("aside.side-panel");
+  if ((await side.getAttribute("data-open")) === "true") await side.getByRole("button", { name: "Paneli kapat" }).click();
+}
+
+/** "Çevir ▾" menu item. */
+async function translateMenu(p: Page, item: string): Promise<void> {
+  await p.getByRole("button", { name: "Diğer çeviri seçenekleri" }).click();
+  await p.getByRole("menuitem", { name: item }).click();
+}
+
+const sheet = (p: Page, n: number, kind: "orijinal" | "Türkçe" | "öğrenme") => p.getByRole("figure", { name: `Sayfa ${n} (${kind})` });
+const toasts = (p: Page) => p.locator(".toasts");
 
 test.beforeAll(async ({ browser }) => {
   expect(BOOK, "E2E_BOOK must be set (run via npm run e2e)").not.toBe("");
@@ -40,18 +57,21 @@ test.afterAll(async () => {
   await page.close();
 });
 
-test("connects to the live engine and opens a PDF", async () => {
+test("library → open a PDF → reader", async () => {
   await page.goto("/");
   await expect(page.getByText("Motor bağlı", { exact: true })).toBeVisible();
+  await page.screenshot({ path: `${SHOTS}/v2/light-1440x900-library-empty.png` });
   page.once("dialog", (d) => void d.accept(BOOK));
-  await page.getByRole("button", { name: "PDF Aç" }).click();
+  await page.getByRole("button", { name: "PDF aç" }).click();
   await expect(page.locator(".topbar .title")).toHaveText("book");
   await expect(page.getByRole("navigation", { name: "Sayfa" })).toContainText("/ 4");
-  // TOC from the PDF outline.
+  // TOC from the PDF outline, in the side panel.
+  await panel(page, "İçindekiler");
   await expect(page.getByText("Chapter 5. Replication").first()).toBeVisible();
+  await closePanel(page);
 });
 
-test("Orijinal mode renders the PDF page", async () => {
+test("Orijinal mode renders the PDF page as a sheet", async () => {
   await mode(page, "Orijinal");
   const canvas = page.getByLabel("PDF sayfa 1");
   await expect(canvas).toBeVisible();
@@ -60,11 +80,12 @@ test("Orijinal mode renders the PDF page", async () => {
 });
 
 test("translate page: cancel makes no call, confirm translates", async () => {
-  await mode(page, "Sadece Çeviri");
-  await expect(page.getByText("Bu sayfa henüz çevrilmedi")).toBeVisible();
+  await mode(page, "Türkçe");
+  await expect(sheet(page, 1, "Türkçe").getByText("Bu sayfa henüz çevrilmedi")).toBeVisible();
   const before = await spend(page);
 
-  await page.getByRole("button", { name: /Bu Sayfayı Çevir/ }).click();
+  const primary = page.getByRole("button", { name: /Bu sayfayı çevir \(sayfa/ });
+  await primary.click();
   const modal = page.getByRole("dialog", { name: /maliyet onayı/ });
   await expect(modal).toBeVisible();
   await expect(modal.getByTestId("cost-calls")).toHaveText("1");
@@ -72,43 +93,37 @@ test("translate page: cancel makes no call, confirm translates", async () => {
   await expect(modal).toBeHidden();
   await page.waitForTimeout(500);
   expect(await spend(page)).toBe(before);
-  await expect(page.getByText("Bu sayfa henüz çevrilmedi")).toBeVisible();
+  await expect(sheet(page, 1, "Türkçe").getByText("Bu sayfa henüz çevrilmedi")).toBeVisible();
 
-  await page.getByRole("button", { name: /Bu Sayfayı Çevir/ }).click();
+  await primary.click();
   await confirmCost(page);
-  await expect(page.locator(".engine-html")).toContainText("[TR] Replication means");
+  await expect(sheet(page, 1, "Türkçe").locator(".engine-html")).toContainText("[TR] Replication means");
   await expect(page.getByTestId("spend")).toContainText("1 çağrı");
-  await page.screenshot({ path: `${SHOTS}/02-sadece-ceviri.png` });
+  await page.screenshot({ path: `${SHOTS}/02-turkce.png` });
 });
 
-test("Split: block click highlights both sides, scroll is synchronized", async () => {
-  await mode(page, "Split");
-  const right = page.locator(".split .html-pane");
+test("Yan yana: pages line up, block click highlights both sides", async () => {
+  await mode(page, "Yan yana");
+  const right = sheet(page, 1, "Türkçe");
   await expect(right.locator(".engine-html")).toContainText("[TR]");
   const sentence = right.locator('[data-block="0-2"] [data-s="1"]');
   await sentence.click();
   await expect(page.getByTestId("pdf-highlight")).toBeVisible();
-  await expect
-    .poll(() => sentence.evaluate((el) => getComputedStyle(el).backgroundColor))
-    .not.toBe("rgba(0, 0, 0, 0)");
+  await expect.poll(() => sentence.evaluate((el) => getComputedStyle(el).backgroundColor)).not.toBe("rgba(0, 0, 0, 0)");
 
-  // Split fits the PDF to the pane width; a short window makes the page scroll vertically.
-  await page.setViewportSize({ width: 1440, height: 560 });
-  const left = page.locator(".split .pdf-pane");
-  await expect.poll(() => left.evaluate((el) => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(1);
-  await expect.poll(() => left.evaluate((el) => el.scrollHeight - el.clientHeight)).toBeGreaterThan(100);
-  await left.evaluate((el) => (el.scrollTop = el.scrollHeight));
-  await expect.poll(() => right.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
-  await page.screenshot({ path: `${SHOTS}/03-split.png` });
-  await page.setViewportSize({ width: 1440, height: 900 });
+  // Original and Turkish sheets of a page share a row: same top edge.
+  const [a, b] = await Promise.all([sheet(page, 1, "orijinal").boundingBox(), right.boundingBox()]);
+  expect(Math.abs((a?.y ?? 0) - (b?.y ?? 99))).toBeLessThanOrEqual(2);
+  await page.screenshot({ path: `${SHOTS}/03-yan-yana.png` });
 });
 
 test("range job: progress, pause, resume, retry failed pages", async () => {
-  await panel(page, "Kontrol");
+  await translateMenu(page, "Aralık çevir…");
   await page.getByPlaceholder("ör. 120-140").fill("2-4");
-  await page.getByRole("button", { name: "Aralık Çevir" }).click();
+  await page.getByRole("button", { name: "Aralığı çevir" }).click();
   await confirmCost(page);
 
+  // Starting a job opens the side panel on İşler.
   const job = page.locator("article.job").first();
   await expect(job).toContainText("Çalışıyor");
   await job.getByRole("button", { name: "Duraklat" }).click();
@@ -129,50 +144,49 @@ test("range job: progress, pause, resume, retry failed pages", async () => {
   await page.screenshot({ path: `${SHOTS}/05-isler.png` });
 });
 
-test("Tüm Kitabı Çevir: everything cached → no AI call needed", async () => {
-  await panel(page, "Kontrol");
-  await page.getByRole("button", { name: "Tüm Kitabı Çevir" }).click();
+test("Tüm kitabı çevir: everything cached → no AI call needed", async () => {
+  await translateMenu(page, "Tüm kitabı çevir…");
+  await page.getByRole("button", { name: "Tümünü çevir" }).click();
   const modal = page.getByRole("dialog", { name: /maliyet onayı/ });
   await expect(modal.getByTestId("cost-calls")).toHaveText("0");
-  await expect(modal).toContainText("Tümü cache'te");
+  await expect(modal).toContainText("Tümü önbellekte");
   await confirmCost(page);
   await expect(page.locator("article.job").first()).toContainText("Bitti", { timeout: 30_000 });
 });
 
-test("Kitabı Analiz Et → profile editor shows the result and saves edits", async () => {
-  await panel(page, "Kontrol");
-  await page.getByRole("button", { name: "Kitabı Analiz Et" }).click();
+test("Kitabı analiz et → profile editor shows the result and saves edits", async () => {
+  await translateMenu(page, "Kitabı analiz et…");
   await confirmCost(page);
   const editor = page.getByRole("region", { name: "Kitap profili" });
   await expect(editor.getByLabel("Tür")).toHaveValue("yazılım / veri sistemleri");
   await expect(editor.getByLabel("Terim", { exact: true }).first()).toHaveValue("replication");
 
-  await editor.getByRole("button", { name: "+ Terim" }).click();
+  await editor.getByRole("button", { name: "Terim ekle" }).click();
   await editor.getByLabel("Terim", { exact: true }).last().fill("leader");
   await editor.getByLabel("Karşılık", { exact: true }).last().fill("lider");
   await editor.getByLabel("Yeni çevrilmeyecek terim").fill("Kafka");
   await editor.getByLabel("Yeni çevrilmeyecek terim").press("Enter");
   await editor.getByRole("button", { name: "Kaydet" }).click();
-  await expect(page.getByRole("status")).toContainText("Profil kaydedildi");
+  await expect(toasts(page)).toContainText("Profil kaydedildi");
 
-  await panel(page, "Kontrol");
+  await panel(page, "İçindekiler");
   await panel(page, "Profil");
   await expect(editor.getByLabel("Terim", { exact: true }).last()).toHaveValue("leader");
   await expect(editor.locator(".chip", { hasText: "Kafka" })).toBeVisible();
   await page.screenshot({ path: `${SHOTS}/06-profil.png` });
+  await closePanel(page);
 });
 
-test("PDF Dışa Aktar produces a file without AI", async () => {
-  await panel(page, "Kontrol");
+test("PDF olarak dışa aktar produces a file without AI", async () => {
   const before = await spend(page);
-  await page.getByRole("button", { name: "PDF Dışa Aktar" }).click();
-  await expect(page.getByRole("status")).toContainText("PDF hazır:", { timeout: 60_000 });
+  await translateMenu(page, "PDF olarak dışa aktar — Türkçe");
+  await expect(toasts(page)).toContainText("PDF hazır", { timeout: 60_000 });
   expect(await spend(page)).toBe(before);
 });
 
 test("Öğrenme: click word → lookup → save unknown → ruby appears", async () => {
   await mode(page, "Öğrenme");
-  const pane = page.locator(".html-pane.mode-learn");
+  const pane = sheet(page, 1, "öğrenme");
   const word = pane.locator('[data-block="0-2"] [data-w="replication"]').first();
   await expect(word).toBeVisible();
   await word.click();
@@ -187,7 +201,7 @@ test("Öğrenme: click word → lookup → save unknown → ruby appears", async
 });
 
 test("flashcard review and stats", async () => {
-  await panel(page, "Öğrenme");
+  await panel(page, "Kelimeler");
   const learn = page.getByRole("region", { name: "Öğrenme" });
   await expect(learn.locator("ul.vocab")).toContainText("replication");
   await learn.getByRole("tab", { name: "Tekrar" }).click();
@@ -199,10 +213,11 @@ test("flashcard review and stats", async () => {
   await expect(stats).toContainText("Bugün yapılan");
   await expect(stats.locator("dd").nth(3)).toHaveText("1");
   await page.screenshot({ path: `${SHOTS}/08-istatistik.png` });
+  await closePanel(page);
 });
 
 test("Bunu açıkla: cost confirm first time, cached second time", async () => {
-  const pane = page.locator(".html-pane.mode-learn");
+  const pane = sheet(page, 1, "öğrenme");
   await pane.locator('[data-block="0-2"] [data-w="replication"]').first().click();
   const pop = page.getByRole("dialog", { name: "Sözlük: replication" });
   await pop.getByRole("button", { name: "Bunu açıkla…" }).click();
@@ -212,11 +227,73 @@ test("Bunu açıkla: cost confirm first time, cached second time", async () => {
   await expect(box.locator("strong", { hasText: "Yapı:" })).toBeVisible();
   await expect(box).not.toContainText("**");
   await page.screenshot({ path: `${SHOTS}/09-aciklama.png` });
-  await box.getByRole("button", { name: "Kapat" }).click();
+  await box.getByRole("button", { name: "Kapat", exact: true }).click();
 
   await pane.locator('[data-block="0-2"] [data-w="replication"]').first().click();
   await page.getByRole("dialog", { name: "Sözlük: replication" }).getByRole("button", { name: "Bunu açıkla…" }).click();
   await expect(page.getByRole("dialog", { name: /maliyet onayı/ })).toBeHidden();
-  await expect(page.getByRole("dialog", { name: "Açıklama" })).toContainText("cache");
-  await page.getByRole("dialog", { name: "Açıklama" }).getByRole("button", { name: "Kapat" }).click();
+  await expect(page.getByRole("dialog", { name: "Açıklama" })).toContainText("önbellekten");
+  await page.getByRole("dialog", { name: "Açıklama" }).getByRole("button", { name: "Kapat", exact: true }).click();
 });
+
+/** Design review matrix: light/dark × two window sizes (docs/ui-redesign.md acceptance 1). */
+for (const scheme of ["light", "dark"] as const) {
+  for (const [w, h] of [
+    [1280, 800],
+    [1920, 1080],
+  ] as const) {
+    test(`screens: ${scheme} ${w}×${h}`, async () => {
+      const shot = (name: string) => page.screenshot({ path: `${SHOTS}/v2/${scheme}-${w}x${h}-${name}.png` });
+      await page.emulateMedia({ colorScheme: scheme, reducedMotion: "reduce" });
+      await page.setViewportSize({ width: w, height: h });
+      const before = await spend(page);
+
+      await page.getByRole("button", { name: "Kitaplık" }).click();
+      const card = page.getByRole("region", { name: "Son açılanlar" }).getByRole("button").first();
+      await expect(card).toBeVisible();
+      await shot("library");
+      await card.click();
+      await expect(page.locator(".topbar .title")).toHaveText("book");
+
+      for (const [label, file] of [
+        ["Orijinal", "mode-orijinal"],
+        ["Yan yana", "mode-yan-yana"],
+        ["Türkçe", "mode-turkce"],
+        ["Öğrenme", "mode-ogrenme"],
+      ] as const) {
+        await mode(page, label);
+        await page.waitForTimeout(700); // PDF.js paint + HTML fetch
+        await shot(file);
+      }
+
+      for (const [tab, file] of [
+        ["İçindekiler", "panel-icindekiler"],
+        ["İşler", "panel-isler"],
+        ["Kelimeler", "panel-kelimeler"],
+        ["Profil", "panel-profil"],
+      ] as const) {
+        await panel(page, tab);
+        await page.waitForTimeout(250);
+        await shot(file);
+      }
+      await closePanel(page);
+
+      await page.keyboard.press("Control+k");
+      const palette = page.getByRole("dialog", { name: "Komut paleti" });
+      await expect(palette).toBeVisible();
+      await shot("palette");
+      await page.keyboard.press("Escape");
+      await expect(palette).toBeHidden();
+
+      await translateMenu(page, "Bu sayfayı yeniden çevir…");
+      const modal = page.getByRole("dialog", { name: /maliyet onayı/ });
+      await expect(modal).toBeVisible();
+      await shot("cost-modal");
+      await modal.getByRole("button", { name: "İptal" }).click();
+      await expect(modal).toBeHidden();
+
+      // Looking around never costs anything.
+      expect(await spend(page)).toBe(before);
+    });
+  }
+}

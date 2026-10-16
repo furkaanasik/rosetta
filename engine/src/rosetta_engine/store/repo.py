@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 from typing import Literal, NamedTuple
 
 from rosetta_engine.models import (
+    TRANSLATABLE,
     Block,
     BlockType,
     Book,
@@ -76,6 +77,14 @@ class UsageRow:
     calibrate: bool = True  # False: excluded from estimator calibration
 
 
+@dataclass(frozen=True)
+class LibraryRow:
+    book: Book
+    last_opened_at: str | None
+    last_page: int | None  # 0-based
+    created_at: str
+
+
 class _Repo:
     def __init__(self, conn: sqlite3.Connection, clock: Clock = utc_now) -> None:
         self._c = conn
@@ -120,6 +129,44 @@ class BookRepo(_Repo):
         if row is None:
             return None
         return self._book(row)
+
+    def touch_opened(self, book_id: int) -> None:
+        """Record that the book was just opened (library order)."""
+        with self._c:
+            self._c.execute(
+                "UPDATE books SET last_opened_at = ? WHERE id = ?", (self._now(), book_id)
+            )
+
+    def set_progress(self, book_id: int, page_no: int) -> LibraryRow | None:
+        """Remember the 0-based page the reader is on; also counts as "opened now"."""
+        with self._c:
+            self._c.execute(
+                "UPDATE books SET last_page = ?, last_opened_at = ? WHERE id = ?",
+                (page_no, self._now(), book_id),
+            )
+        rows = self.library(book_id=book_id)
+        return rows[0] if rows else None
+
+    def library(self, *, book_id: int | None = None) -> list[LibraryRow]:
+        """Books for the library screen, most recently opened first (never-opened last)."""
+        sql = (
+            "SELECT id, file_hash, title, page_count, file_path, last_opened_at, last_page, "
+            "created_at FROM books"
+        )
+        args: tuple[object, ...] = ()
+        if book_id is not None:
+            sql += " WHERE id = ?"
+            args = (book_id,)
+        sql += " ORDER BY last_opened_at IS NULL, last_opened_at DESC, created_at DESC, id DESC"
+        return [
+            LibraryRow(
+                book=self._book(r),
+                last_opened_at=r["last_opened_at"],
+                last_page=r["last_page"],
+                created_at=r["created_at"],
+            )
+            for r in self._c.execute(sql, args)
+        ]
 
     @staticmethod
     def _book(row: sqlite3.Row) -> Book:
@@ -250,6 +297,28 @@ class BlockRepo(_Repo):
             blocks=blocks,
         )
 
+    def overview(self, book_id: int) -> dict[int, tuple[bool, int]]:
+        """Extracted pages only: 0-based page → (has_text_layer, translatable non-blank blocks).
+
+        Read from the DB; nothing is extracted here."""
+        out: dict[int, tuple[bool, int]] = {
+            int(r["page_no"]): (bool(r["has_text_layer"]), 0)
+            for r in self._c.execute(
+                "SELECT page_no, has_text_layer FROM pages WHERE book_id = ?", (book_id,)
+            )
+        }
+        kinds = tuple(t.value for t in TRANSLATABLE)
+        marks = ", ".join("?" for _ in kinds)
+        for r in self._c.execute(
+            f"SELECT page_no, COUNT(*) AS n FROM blocks WHERE book_id = ? AND type IN ({marks}) "
+            "AND trim(text) <> '' GROUP BY page_no",
+            (book_id, *kinds),
+        ):
+            page = int(r["page_no"])
+            if page in out:
+                out[page] = (out[page][0], int(r["n"]))
+        return out
+
 
 def _translation(row: sqlite3.Row) -> Translation:
     return Translation(
@@ -379,6 +448,18 @@ class PageStatusRepo(_Repo):
         if r is None:
             return None
         return PageStatusRow(book_id, page_no, lang, provider, model, r["status"], r["error"])
+
+    def done_pages(self, book_id: int, lang: str, provider: str, model: str) -> frozenset[int]:
+        """0-based pages fully translated ('done') for lang/provider/model."""
+        rows = self._c.execute(
+            "SELECT page_no FROM page_status WHERE book_id = ? AND lang = ? AND provider = ? "
+            "AND model = ? AND status = 'done'",
+            (book_id, lang, provider, model),
+        )
+        return frozenset(int(r["page_no"]) for r in rows)
+
+    def done_count(self, book_id: int, lang: str, provider: str, model: str) -> int:
+        return len(self.done_pages(book_id, lang, provider, model))
 
 
 class UsageRepo(_Repo):

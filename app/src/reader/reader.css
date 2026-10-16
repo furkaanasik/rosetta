@@ -1,0 +1,410 @@
+/*
+ * Reader core: paper sheets in a continuous scroll (docs/ui-redesign.md §3).
+ * Colours/fonts come from the design tokens (styles/tokens.css, WS-C); every var() has a
+ * fallback so the reader also renders on its own (tests, older shells).
+ */
+
+/* ---------- reading area ---------- */
+.rs-canvas {
+  position: relative;
+  height: 100%;
+  min-height: 0;
+  overflow: auto;
+  background: var(--canvas, #f4f1ea);
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable both-edges;
+  outline: none;
+}
+.rs-track {
+  position: relative;
+  width: 100%;
+}
+/* One virtual row: a sheet (or a split pair) + its page number + the 32 px gap (16 + 16). */
+.rs-row {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  box-sizing: border-box;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  gap: 24px;
+  padding: 16px 32px;
+}
+/* Wider than the window (zoomed in): scroll horizontally instead of clipping the sheet. */
+.rs-row > .rs-sheet-wrap {
+  flex: none;
+}
+
+/* ---------- sheet ---------- */
+.rs-sheet-wrap {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.rs-sheet {
+  position: relative;
+  box-sizing: border-box;
+  background: var(--sheet, #fffdf8);
+  color: var(--ink, #1e1b16);
+  border-radius: 3px;
+  box-shadow:
+    0 0 0 1px var(--sheet-edge, rgba(60, 45, 20, 0.1)),
+    var(--sheet-shadow, 0 1px 2px rgba(40, 30, 15, 0.06), 0 8px 24px -8px rgba(40, 30, 15, 0.12));
+}
+.rs-sheet--fixed {
+  overflow: hidden;
+}
+.rs-sheet--flow {
+  /* Longer translation → taller sheet; nothing is clipped or shrunk (rule 4). */
+  overflow: visible;
+}
+.rs-folio {
+  height: 28px;
+  line-height: 28px;
+  font: 500 12px/28px var(--font-ui, "Geist Variable", system-ui, sans-serif);
+  color: var(--ink-3, #8f8778);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+  user-select: none;
+}
+
+/* ---------- original (PDF.js) ---------- */
+.rs-original {
+  position: absolute;
+  inset: 0;
+}
+.rs-pdf-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+/* Minimal PDF.js text layer (transparent, selectable text over the canvas). */
+.rs-textlayer {
+  position: absolute;
+  inset: 0;
+  overflow: clip;
+  line-height: 1;
+  text-align: initial;
+  transform-origin: 0 0;
+  z-index: 1;
+  --min-font-size: 1;
+  --text-scale-factor: calc(var(--total-scale-factor) * var(--min-font-size));
+  --min-font-size-inv: calc(1 / var(--min-font-size));
+}
+.rs-textlayer :is(span, br) {
+  color: transparent;
+  position: absolute;
+  white-space: pre;
+  cursor: text;
+  transform-origin: 0% 0%;
+}
+.rs-textlayer > :not(.markedContent),
+.rs-textlayer .markedContent span:not(.markedContent) {
+  --font-height: 0;
+  font-size: calc(var(--text-scale-factor) * var(--font-height));
+  --scale-x: 1;
+  --rotate: 0deg;
+  transform: rotate(var(--rotate)) scaleX(var(--scale-x)) scale(var(--min-font-size-inv));
+}
+.rs-textlayer .markedContent {
+  display: contents;
+}
+.rs-textlayer ::selection {
+  background: color-mix(in srgb, var(--accent, #b4532a) 28%, transparent);
+}
+.rs-textlayer br::selection {
+  background: transparent;
+}
+/* Paired block on the original page: a quiet accent bar + tint, fading out. */
+.rs-pdf-highlight {
+  position: absolute;
+  z-index: 2;
+  pointer-events: none;
+  border-radius: 4px;
+  border-left: 2px solid var(--accent, #b4532a);
+  background: var(--accent-soft, rgba(180, 83, 42, 0.1));
+  animation: rs-hl-fade 1200ms var(--ease, cubic-bezier(0.32, 0.72, 0, 1)) forwards;
+}
+@keyframes rs-hl-fade {
+  0%,
+  60% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+/* ---------- states inside a sheet ---------- */
+.rs-skeleton {
+  position: absolute;
+  inset: 0;
+  background: var(--sheet, #fffdf8);
+}
+.rs-skeleton--overlay {
+  z-index: 1;
+}
+.rs-skeleton-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 1.6em;
+  font-size: calc(var(--scale, 1) * 10.5pt);
+}
+.rs-skeleton-title .skeleton {
+  height: 1.6em !important;
+  max-width: 46%;
+}
+.rs-card {
+  display: grid;
+  place-items: center;
+  min-height: 40%;
+  height: 100%;
+  padding-top: 18%;
+  text-align: center;
+}
+.rs-card .empty-state__title {
+  text-wrap: balance;
+}
+.rs-card--error .empty-state__title {
+  color: var(--danger, #b3412f);
+}
+.rs-sheet-note {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 0 1.4em;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: var(--accent-soft, rgba(180, 83, 42, 0.1));
+  color: var(--ink-2, #5e574b);
+  font: 400 13px/1.4 var(--font-ui, "Geist Variable", system-ui, sans-serif);
+  text-wrap: pretty;
+}
+.rs-sheet-note--error {
+  position: absolute;
+  inset: auto 16px 16px;
+  z-index: 2;
+  background: color-mix(in srgb, var(--danger, #b3412f) 10%, var(--sheet, #fffdf8));
+  color: var(--danger, #b3412f);
+}
+
+/* ---------- reflowed page HTML (Türkçe / Öğrenme) ---------- */
+.rs-html {
+  font-family: var(--font-reading, "Literata Variable", "Literata", Georgia, serif);
+  font-size: calc(var(--scale, 1) * 10.5pt);
+  line-height: 1.55;
+  color: var(--ink, #1e1b16);
+  text-rendering: optimizeLegibility;
+  hyphens: auto;
+  overflow-wrap: break-word;
+  -webkit-font-smoothing: antialiased;
+}
+.rs-html > main {
+  display: block;
+}
+.rs-html .ff-sans {
+  font-family: var(--font-ui, "Geist Variable", system-ui, sans-serif);
+}
+.rs-html .ff-mono,
+.rs-html code,
+.rs-html pre {
+  font-family: var(--font-mono, "Geist Mono Variable", ui-monospace, monospace);
+}
+.rs-html :where(p, li, figcaption) {
+  margin: 0 0 0.75em;
+  text-wrap: pretty;
+}
+.rs-html :where(h1, h2, h3, h4, h5, h6) {
+  margin: 1.4em 0 0.55em;
+  line-height: 1.22;
+  font-weight: 600;
+  text-wrap: balance;
+  letter-spacing: -0.005em;
+}
+.rs-html main > :first-child,
+.rs-html > :first-child {
+  margin-top: 0;
+}
+/* "BÖLÜM 1" label above the chapter title (split off the h1 text in TranslatedSheet). */
+.rs-html h1 .h-label {
+  display: block;
+  margin-bottom: 0.7em;
+  font: 600 calc(var(--scale, 1) * 8pt) / 1.2 var(--font-ui, "Geist Variable", system-ui, sans-serif);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-3, #8f8778);
+}
+.rs-html h1 {
+  margin-bottom: 1.2em;
+}
+/* Epigraph: a short aside opening the page. */
+.rs-html .rs-epigraph {
+  width: 80%;
+  margin-left: auto;
+  font-style: italic;
+  color: var(--ink-2, #5e574b);
+}
+.rs-html .rs-epigraph.rs-attribution {
+  font-style: normal;
+  text-align: right;
+  font-size: 0.92em;
+}
+.rs-html .aside:not(.rs-epigraph) {
+  padding: 0.7em 1em;
+  border-radius: 6px;
+  background: var(--code-bg, #f1ece2);
+}
+/* Code never overflows the sheet: wrap long lines, keep indentation. */
+.rs-html pre {
+  margin: 0 0 1em;
+  padding: 0.8em 1em;
+  max-width: 100%;
+  box-sizing: border-box;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: normal;
+  line-height: 1.45;
+  font-size: 0.86em;
+  background: var(--code-bg, #f1ece2);
+  border-radius: 6px;
+  tab-size: 4;
+}
+.rs-html :not(pre) > code {
+  padding: 0.05em 0.3em;
+  font-size: 0.9em;
+  background: var(--code-bg, #f1ece2);
+  border-radius: 3px;
+  overflow-wrap: anywhere;
+}
+.rs-html :where(img) {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 0 auto;
+  outline: 1px solid rgba(0, 0, 0, 0.1);
+  outline-offset: -1px;
+}
+.rs-html figure.fig {
+  margin: 1.1em 0;
+}
+.rs-html figcaption {
+  margin-top: 0.5em;
+  font-style: italic;
+  font-size: 0.93em;
+  color: var(--ink-2, #5e574b);
+}
+.rs-html :where(ol, ul) {
+  margin: 0 0 0.9em;
+  padding-left: 1.5em;
+}
+.rs-html li::marker {
+  color: var(--ink-3, #8f8778);
+  font-variant-numeric: tabular-nums;
+}
+.rs-html aside.footnotes {
+  margin-top: 1.6em;
+  padding-top: 0.8em;
+  border-top: 1px solid var(--line, rgba(30, 27, 22, 0.08));
+  font-size: 0.85em;
+  color: var(--ink-2, #5e574b);
+}
+/* A partly translated page keeps the English of the missing blocks, visibly set apart. */
+.rs-html .untranslated {
+  color: var(--ink-2, #5e574b);
+  border-left: 2px dashed var(--line, rgba(30, 27, 22, 0.16));
+  padding-left: 0.7em;
+}
+.rs-html [data-s] {
+  border-radius: 3px;
+  transition-property: background-color;
+  transition-duration: 150ms;
+}
+.rs-html [data-s]:hover {
+  background: var(--accent-soft, rgba(180, 83, 42, 0.1));
+  cursor: pointer;
+}
+/* Paired block (split): accent bar + tint, fades after 1.2 s (class removed by the sheet). */
+.rs-html .rs-hl {
+  background: var(--accent-soft, rgba(180, 83, 42, 0.1));
+  box-shadow: -0.6em 0 0 -0.45em var(--accent, #b4532a);
+  border-radius: 3px;
+  transition-property: background-color, box-shadow;
+  transition-duration: 400ms;
+}
+
+/* Callouts ❶ drawn with CSS (sanitize.ts turns the glyph into a digit). */
+.rs-html .callout {
+  font-family: var(--font-ui, "Geist Variable", system-ui, sans-serif);
+  font-weight: 700;
+  color: var(--accent, #b4532a);
+}
+.rs-html .callout-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.3em;
+  height: 1.3em;
+  border-radius: 50%;
+  background: var(--ink, #1e1b16);
+  color: var(--sheet, #fffdf8);
+  font: 700 0.7em/1 var(--font-ui, "Geist Variable", system-ui, sans-serif);
+  font-variant-numeric: tabular-nums;
+  vertical-align: 0.12em;
+}
+.rs-html li.callout-item {
+  list-style: none;
+  position: relative;
+}
+.rs-html li.callout-item > .callout {
+  position: absolute;
+  left: -1.8em;
+  top: 0.28em;
+}
+
+/* Learn mode: words are clickable; unknown words carry a small Turkish gloss above. */
+.rs-html.mode-learn :is([data-w], [data-word]) {
+  cursor: pointer;
+  border-radius: 2px;
+}
+.rs-html.mode-learn :is([data-w], [data-word]):hover {
+  background: var(--accent-soft, rgba(180, 83, 42, 0.1));
+}
+.rs-html.mode-learn ruby {
+  ruby-position: over;
+}
+.rs-html.mode-learn ruby rt {
+  font: 500 0.5em/1 var(--font-ui, "Geist Variable", system-ui, sans-serif);
+  color: var(--accent, #b4532a);
+  letter-spacing: 0.01em;
+}
+/* Room for the glosses so ruby lines don't collide. */
+.rs-html.mode-learn :where(p, li) {
+  line-height: 1.9;
+}
+/* Headings: the gloss stays small (not half of a 25 pt title) and gets its own line space. */
+.rs-html.mode-learn :where(h1, h2, h3, h4, h5, h6) {
+  line-height: 1.6;
+}
+.rs-html.mode-learn :where(h1, h2, h3, h4, h5, h6) ruby rt {
+  font-size: max(0.32em, calc(var(--scale, 1) * 6.5pt));
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
+/* The engine's chapter label never carries a gloss line height. */
+.rs-html.mode-learn h1 .h-label {
+  line-height: 1.2;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rs-pdf-highlight {
+    animation: none;
+  }
+  .rs-html [data-s],
+  .rs-html .rs-hl {
+    transition: none;
+  }
+}

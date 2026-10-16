@@ -236,6 +236,25 @@ def _heading_level(block: Block) -> int:
     return min(max(level, 1), 6)
 
 
+_CHAPTER_LABEL = re.compile(
+    r"^((?:CHAPTER|Chapter|BÖLÜM|Bölüm|PART|Part|KISIM|Kısım)\s+(?:\d+|[IVXLC]+))\s+(?=\S)"
+)
+
+
+def _labelled(fmt: Formatter) -> Formatter:
+    """Chapter headings: "CHAPTER 1 Title" → ``<span class="h-label">CHAPTER 1</span> Title``
+    so the UI can style the label like the original (escaped, our own span only)."""
+
+    def wrap(text: str) -> Markup:
+        m = _CHAPTER_LABEL.match(text)
+        if m is None:
+            return fmt(text)
+        label = Markup('<span class="h-label">') + escape(m.group(1)) + Markup("</span>")
+        return label + Markup(" ") + fmt(text[m.end() :])
+
+    return wrap
+
+
 def crop_name(block: Block) -> str:
     """Asset file name; extractor version + bbox hash make stale crops impossible to reuse."""
     key = f"{EXTRACTOR_VERSION}:{','.join(f'{v:.2f}' for v in block.bbox)}"
@@ -279,14 +298,18 @@ def _view(
     if block.italic:
         classes.append("italic")
 
-    en = TextView(_spans(block.sentences, block.text, fmt))
+    en_fmt: Formatter = fmt
+    tr_fmt: Formatter = inline
+    if block.type is BlockType.HEADING and _heading_level(block) == 1:
+        en_fmt, tr_fmt = _labelled(fmt), _labelled(inline)
+    en = TextView(_spans(block.sentences, block.text, en_fmt))
     tr: TextView | None = None
     if block.translatable and with_tr:
         t = translations.get(block.text_hash)
         if t is None:
             classes.append("untranslated")
         else:
-            tr = TextView(_spans(t.sentences, t.text), aligned=t.sentence_aligned)
+            tr = TextView(_spans(t.sentences, t.text, tr_fmt), aligned=t.sentence_aligned)
 
     tag = "p"
     if block.type is BlockType.HEADING:

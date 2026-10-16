@@ -188,7 +188,7 @@ describe("ProfileEditor", () => {
     const tur = await screen.findByDisplayValue("eski");
     await user.clear(tur);
     await user.type(tur, "yeni");
-    await user.click(screen.getByRole("button", { name: /Kitabı Analiz Et/ }));
+    await user.click(screen.getByRole("button", { name: /Kitabı analiz et/i }));
     // User pressed İptal in the cost modal: onDone never runs; a later refresh must not wipe edits.
     rerender(<ProfileEditor api={api} bookId={1} refreshKey={1} onAnalyze={(done) => (analyzed = done)} onMessage={() => undefined} />);
     await act(async () => undefined);

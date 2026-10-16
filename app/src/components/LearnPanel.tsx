@@ -1,4 +1,6 @@
+import { BookOpenText, Cards, CheckCircle, MagnifyingGlass, Plug, PlusCircle } from "@phosphor-icons/react";
 import { useCallback, useEffect, useState } from "react";
+import { Badge, Button, EmptyState, Segmented, SkeletonLines } from "../ui";
 import { useLatest } from "../lib/useLatest";
 import type { EngineApi } from "../api/engine";
 import type { LearnStats, Rating, ReviewCard, TermInfo, VocabItem } from "../api/types";
@@ -28,16 +30,26 @@ interface Props {
 
 export function LearnPanel({ api, bookId, refreshKey, onChange }: Props) {
   const [tab, setTab] = useState<Tab>("vocab");
-  if (!api) return <section className="panel"><p className="muted">Motor bağlı değil.</p></section>;
+  if (!api)
+    return (
+      <section className="panel" aria-label="Öğrenme">
+        <EmptyState size="compact" icon={<Plug />} title="Motor bağlı değil" />
+      </section>
+    );
   return (
     <section className="panel" aria-label="Öğrenme">
-      <div className="tabs" role="tablist">
-        {(["vocab", "review", "terms", "stats"] as Tab[]).map((t) => (
-          <button key={t} type="button" role="tab" aria-selected={tab === t} className={tab === t ? "active" : ""} onClick={() => setTab(t)}>
-            {{ vocab: "Defter", review: "Tekrar", terms: "Terimler", stats: "İstatistik" }[t]}
-          </button>
-        ))}
-      </div>
+      <Segmented<Tab>
+        label="Öğrenme bölümleri"
+        value={tab}
+        onChange={setTab}
+        className="segmented--full"
+        items={[
+          { value: "vocab", label: "Defter" },
+          { value: "review", label: "Tekrar" },
+          { value: "terms", label: "Terimler" },
+          { value: "stats", label: "İstatistik" },
+        ]}
+      />
       {tab === "vocab" && <VocabList api={api} refreshKey={refreshKey} onChange={onChange} />}
       {tab === "review" && <Review api={api} onChange={onChange} />}
       {tab === "terms" && <Terms api={api} bookId={bookId} onChange={onChange} />}
@@ -57,20 +69,30 @@ function VocabList({ api, refreshKey, onChange }: { api: EngineApi; refreshKey: 
   }, [load, refreshKey]);
   return (
     <>
-      {err && <p className="error">{err}</p>}
-      <input aria-label="Kelime ara" placeholder="Ara…" value={search} onChange={(e) => setSearch(e.target.value)} />
-      {items.length === 0 && <p className="muted">Kelime defteri boş. Metinde bir kelimeye tıklayıp kaydedin.</p>}
+      {err && <p className="error small">{err}</p>}
+      <label className="search">
+        <MagnifyingGlass aria-hidden="true" />
+        <input aria-label="Kelime ara" placeholder="Defterde ara…" value={search} onChange={(e) => setSearch(e.target.value)} />
+      </label>
+      {items.length === 0 && (
+        <EmptyState size="compact" icon={<BookOpenText />} title={search ? "Eşleşen kelime yok" : "Kelime defteri boş"}>
+          {!search && "Metinde bir kelimeye tıklayıp kaydedin."}
+        </EmptyState>
+      )}
       <ul className="vocab">
         {items.map((v) => (
-          <li key={v.id}>
-            <strong>{v.word}</strong> <span className="muted">{v.meaning}</span>
-            <label className="small">
+          <li key={v.id} className="vocab__item">
+            <div className="vocab__text">
+              <strong className="vocab__word">{v.word}</strong>
+              <span className="vocab__meaning">{v.meaning || "—"}</span>
+            </div>
+            <label className="vocab__toggle" title="İşaretli kelimelerin karşılığı Öğrenme görünümünde gösterilir">
               <input
                 type="checkbox"
                 checked={v.unknown}
                 onChange={(e) => void api.setUnknown(v.id, e.target.checked).then(() => (load(), onChange()), report)}
-              />{" "}
-              bilmiyorum
+              />
+              <span>bilmiyorum</span>
             </label>
           </li>
         ))}
@@ -87,9 +109,14 @@ function Review({ api, onChange }: { api: EngineApi; onChange: () => void }) {
   useEffect(() => {
     void latest(api.dueCards(50), setCards, report);
   }, [api, latest, report]);
-  if (!cards) return err ? <p className="error">{err}</p> : <p className="muted">Yükleniyor…</p>;
+  if (!cards) return err ? <p className="error small">{err}</p> : <SkeletonLines lines={3} />;
   const card = cards[0];
-  if (!card) return <p className="muted">Bugün tekrar edilecek kart yok. 🎉</p>;
+  if (!card)
+    return (
+      <EmptyState size="compact" icon={<CheckCircle />} title="Bugünlük bu kadar">
+        Tekrar edilecek kart yok.
+      </EmptyState>
+    );
   const rate = async (r: Rating) => {
     try {
       await api.review(card.vocab_id, r);
@@ -101,19 +128,29 @@ function Review({ api, onChange }: { api: EngineApi; onChange: () => void }) {
     }
   };
   return (
-    <div className="card">
-      {err && <p className="error">{err}</p>}
-      <p className="small muted">{cards.length} kart kaldı</p>
+    <div className="card flashcard">
+      {err && <p className="error small">{err}</p>}
+      <p className="flashcard__count num">
+        <Cards aria-hidden="true" /> {cards.length} kart kaldı
+      </p>
       <p className="cloze">{card.front}</p>
       {!flipped ? (
-        <button type="button" className="primary" onClick={() => setFlipped(true)}>Cevabı göster</button>
+        <Button variant="primary" onClick={() => setFlipped(true)}>
+          Cevabı göster
+        </Button>
       ) : (
         <>
-          <p><strong>{card.word}</strong> — {card.meaning}</p>
-          {card.sentence_tr && <p className="muted">{card.sentence_tr}</p>}
-          <div className="row">
+          <div className="flashcard__back">
+            <p className="flashcard__word">
+              <strong>{card.word}</strong> <span>{card.meaning}</span>
+            </p>
+            {card.sentence_tr && <p className="flashcard__tr">{card.sentence_tr}</p>}
+          </div>
+          <div className="flashcard__ratings">
             {RATINGS.map(({ r, label }) => (
-              <button key={r} type="button" onClick={() => void rate(r)}>{label}</button>
+              <Button key={r} size="sm" className={`rate rate--${r}`} onClick={() => void rate(r)}>
+                {label}
+              </Button>
             ))}
           </div>
         </>
@@ -133,20 +170,28 @@ function Terms({ api, bookId, onChange }: { api: EngineApi; bookId: number | nul
   useEffect(() => {
     void load();
   }, [load]);
-  if (bookId === null) return <p className="muted">Önce bir PDF açın.</p>;
+  if (bookId === null) return <EmptyState size="compact" title="Önce bir PDF açın" />;
   return (
     <>
-      {err && <p className="error">{err}</p>}
-      {terms.length === 0 && <p className="muted">Profilde sözlük terimi yok.</p>}
+      {err && <p className="error small">{err}</p>}
+      {terms.length === 0 && (
+        <EmptyState size="compact" icon={<BookOpenText />} title="Profilde sözlük terimi yok">
+          Kitap profili oluşturulunca teknik terimler burada listelenir.
+        </EmptyState>
+      )}
       {terms.length > 0 && (
-        <button type="button" onClick={() => void api.addTerms(bookId).then(() => (load(), onChange()), report)}>
+        <Button size="sm" icon={<PlusCircle />} onClick={() => void api.addTerms(bookId).then(() => (load(), onChange()), report)}>
           Tümünü deftere ekle
-        </button>
+        </Button>
       )}
       <ul className="vocab">
         {terms.map((t) => (
-          <li key={t.term}>
-            <strong>{t.term}</strong> <span className="muted">{t.tr}</span> {t.in_vocab && <span className="badge done">defterde</span>}
+          <li key={t.term} className="vocab__item">
+            <div className="vocab__text">
+              <strong className="vocab__word">{t.term}</strong>
+              <span className="vocab__meaning">{t.tr}</span>
+            </div>
+            {t.in_vocab && <Badge tone="sage">defterde</Badge>}
           </li>
         ))}
       </ul>
@@ -161,14 +206,29 @@ function Stats({ api, refreshKey }: { api: EngineApi; refreshKey: number }) {
   useEffect(() => {
     void latest(api.stats(), setS, report);
   }, [api, refreshKey, latest, report]);
-  if (!s) return err ? <p className="error">{err}</p> : <p className="muted">Yükleniyor…</p>;
+  if (!s) return err ? <p className="error small">{err}</p> : <SkeletonLines lines={3} />;
   return (
-    <dl className="stats">
-      <dt>Toplam kelime</dt><dd>{s.total_words}</dd>
-      <dt>Öğrenilmiş</dt><dd>{s.mature_words}</dd>
-      <dt>Bugün tekrar</dt><dd>{s.due_today}</dd>
-      <dt>Bugün yapılan</dt><dd>{s.reviewed_today}</dd>
-      <dt>Seri</dt><dd>{s.streak_days} gün</dd>
+    <dl className="stats num">
+      <div className="stat">
+        <dt>Toplam kelime</dt>
+        <dd>{s.total_words}</dd>
+      </div>
+      <div className="stat">
+        <dt>Öğrenilmiş</dt>
+        <dd>{s.mature_words}</dd>
+      </div>
+      <div className="stat">
+        <dt>Bugün tekrar</dt>
+        <dd>{s.due_today}</dd>
+      </div>
+      <div className="stat">
+        <dt>Bugün yapılan</dt>
+        <dd>{s.reviewed_today}</dd>
+      </div>
+      <div className="stat stat--wide">
+        <dt>Seri</dt>
+        <dd>{s.streak_days} gün</dd>
+      </div>
     </dl>
   );
 }

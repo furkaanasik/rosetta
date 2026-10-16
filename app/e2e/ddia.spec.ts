@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 
 /**
  * @ddia — read-only visual check of the DDIA book (run: `npm run e2e:ddia`). The engine runs on a
@@ -9,45 +9,78 @@ const BOOK = process.env.E2E_BOOK ?? "";
 const SHOTS = "e2e/screenshots";
 const PAGES = [25, 30, 59, 94, 115];
 
+const sheet = (p: Page, n: number, kind: "orijinal" | "Türkçe") => p.getByRole("figure", { name: `Sayfa ${n} (${kind})` });
+
 /** Figure/table crops are fetched with the bearer token (blob URLs): wait until all are painted. */
-async function figuresLoaded(page: import("@playwright/test").Page) {
-  await page.waitForFunction(() =>
-    Array.from(document.querySelectorAll<HTMLImageElement>(".engine-html img[data-asset]")).every(
-      (img) => img.complete && img.naturalWidth > 0,
-    ),
-  );
-  const srcs = await page.locator(".engine-html img").evaluateAll((els) => els.map((e) => e.getAttribute("src") ?? ""));
+async function figuresLoaded(p: Page, n: number) {
+  const html = sheet(p, n, "Türkçe").locator(".engine-html");
+  await expect
+    .poll(() =>
+      html.evaluate((root) =>
+        Array.from(root.querySelectorAll<HTMLImageElement>("img")).every((img) => img.complete && img.naturalWidth > 0),
+      ),
+    )
+    .toBe(true);
+  const srcs = await html.locator("img").evaluateAll((els) => els.map((e) => e.getAttribute("src") ?? ""));
   expect(srcs.every((s) => s.startsWith("blob:") && !s.includes("token"))).toBe(true);
+}
+
+async function gotoPage(p: Page, n: number) {
+  const field = p.getByLabel("Sayfa numarası");
+  await field.fill(String(n));
+  await field.press("Enter");
+  await expect(field).toHaveValue(String(n));
+}
+
+async function mode(p: Page, label: "Yan yana" | "Türkçe" | "Orijinal") {
+  await p.getByRole("tablist", { name: "Görünüm modu" }).getByRole("tab", { name: label }).click();
 }
 
 test.skip(!process.env.E2E_DDIA, "run with npm run e2e:ddia");
 
-test("DDIA: Split and Sadece Çeviri on the translated pages @ddia", async ({ page }) => {
-  await page.setViewportSize({ width: 1600, height: 1000 });
-  await page.goto("/");
-  page.once("dialog", (d) => void d.accept(BOOK));
-  await page.getByRole("button", { name: "PDF Aç" }).click();
-  await expect(page.locator(".topbar .title")).toContainText("Designing Data-Intensive");
-  const before = (await page.getByTestId("spend").textContent()) ?? "";
+for (const [scheme, w, h] of [
+  ["light", 1600, 1000],
+  ["light", 1280, 800],
+  ["dark", 1280, 800],
+  ["dark", 1920, 1080],
+] as const) {
+  test(`DDIA: Yan yana and Türkçe on the translated pages (${scheme} ${w}×${h}) @ddia`, async ({ page }) => {
+    await page.emulateMedia({ colorScheme: scheme, reducedMotion: "reduce" });
+    await page.setViewportSize({ width: w, height: h });
+    await page.goto("/");
+    page.once("dialog", (d) => void d.accept(BOOK));
+    await page.getByRole("button", { name: "PDF aç" }).click();
+    await expect(page.locator(".topbar .title")).toContainText("Designing Data-Intensive");
+    const before = (await page.getByTestId("spend").textContent()) ?? "";
+    const tag = `${scheme}-${w}x${h}`;
+    if (scheme === "light" && w === 1600) {
+      await page.getByRole("button", { name: "Kitaplık" }).click();
+      const shelf = page.getByRole("region", { name: "Son açılanlar" });
+      await expect(shelf.getByRole("button").first()).toBeVisible();
+      await page.waitForTimeout(800); // cover thumbnails
+      await page.screenshot({ path: `${SHOTS}/v2/ddia-${tag}-library.png` });
+      await shelf.getByRole("button", { name: /Designing Data-Intensive/ }).first().click();
+    }
 
-  for (const n of PAGES) {
-    await page.getByLabel("Sayfa numarası").fill(String(n));
-    await page.getByRole("tablist", { name: "Görünüm modu" }).getByRole("tab", { name: "Split" }).click();
-    const right = page.locator(".split .html-pane .engine-html");
-    // Real Sonnet translations are shown (Turkish text, no "not translated yet" banner).
-    await expect(right).toContainText(/[çğıöşüÇĞİÖŞÜ]/, { timeout: 20_000 });
-    await expect(page.getByText("Bu sayfa henüz çevrilmedi")).toBeHidden();
-    await expect(page.getByLabel(`PDF sayfa ${n}`)).toBeVisible();
-    await figuresLoaded(page);
-    await page.waitForTimeout(600); // let PDF.js finish painting
-    await page.screenshot({ path: `${SHOTS}/ddia-p${n}-split.png` });
+    for (const n of PAGES) {
+      await mode(page, "Yan yana");
+      await gotoPage(page, n);
+      const tr = sheet(page, n, "Türkçe");
+      // Real Sonnet translations are shown (Turkish text, no "not translated yet" card).
+      await expect(tr.locator(".engine-html")).toContainText(/[çğıöşüÇĞİÖŞÜ]/, { timeout: 20_000 });
+      await expect(tr.getByText("Bu sayfa henüz çevrilmedi")).toBeHidden();
+      await expect(page.getByLabel(`PDF sayfa ${n}`)).toBeVisible();
+      await figuresLoaded(page, n);
+      await page.waitForTimeout(700); // let PDF.js finish painting
+      await page.screenshot({ path: `${SHOTS}/v2/ddia-${tag}-p${n}-yan-yana.png` });
 
-    await page.getByRole("tablist", { name: "Görünüm modu" }).getByRole("tab", { name: "Sadece Çeviri" }).click();
-    await expect(page.locator(".html-pane .engine-html")).toContainText(/[çğıöşü]/);
-    await figuresLoaded(page);
-    await page.screenshot({ path: `${SHOTS}/ddia-p${n}-ceviri.png` });
-  }
+      await mode(page, "Türkçe");
+      await expect(sheet(page, n, "Türkçe").locator(".engine-html")).toContainText(/[çğıöşü]/);
+      await figuresLoaded(page, n);
+      await page.screenshot({ path: `${SHOTS}/v2/ddia-${tag}-p${n}-turkce.png` });
+    }
 
-  // Nothing above may have cost anything.
-  expect((await page.getByTestId("spend").textContent()) ?? "").toBe(before);
-});
+    // Nothing above may have cost anything.
+    expect((await page.getByTestId("spend").textContent()) ?? "").toBe(before);
+  });
+}

@@ -14,6 +14,7 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 import pymupdf
 
@@ -44,6 +45,16 @@ class OpenBook:
     meta: BookMeta
     path: Path
     lock: threading.RLock = field(default_factory=threading.RLock)
+    geometry: list[tuple[float, float, bool]] | None = None  # lazily, see page_geometry
+
+    def page_geometry(self) -> list[tuple[float, float, bool]]:
+        """Per page: (width pt, height pt, uses fonts). Cheap (~0.1 s for 670 pages), no
+        extraction; a page without fonts has no text layer. Call under ``lock``."""
+        if self.geometry is None:
+            d: Any = self.doc
+            pages = [d[i] for i in range(len(d))]
+            self.geometry = [(pg.rect.width, pg.rect.height, bool(pg.get_fonts())) for pg in pages]
+        return self.geometry
 
 
 @dataclass(frozen=True)

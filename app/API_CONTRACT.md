@@ -91,6 +91,22 @@ in `learn` mode, `data-word` / `data-lemma` attributes and `<ruby>` for unknown 
 values stay relative: `assets/<name>`; the app rewrites them to the assets endpoint. Untranslated
 blocks in `tr` mode are rendered in the original with `class="untranslated"`.
 
+### v2 additions — reader redesign (no AI, all Bearer)
+| Method | Path | Body / query | Response |
+|---|---|---|---|
+| GET | `/api/books` | `?lang=` | `LibraryBook[]` `{id, title, page_count, file_path, file_exists, last_opened_at, last_page, translated_pages, cover_url}` — most recently opened first, never-opened last. `last_page` is 1-based or null. `translated_pages` = pages with status `done` for the default lang/provider/model. `cover_url` is a path (`/api/books/{id}/cover`) to fetch with the Bearer header. Never opens a PDF. |
+| PUT | `/api/books/{id}/progress` | `{page}` (1-based) | `{book_id, last_page, last_opened_at}`; 400 out of range. Also bumps `last_opened_at`. `POST /books/open` bumps it too. |
+| GET | `/api/books/{id}/cover` | `?w=240` (64–1024) | PNG thumbnail of page 1 (or the first of pages 1–4 with text/images), cached per width. Bearer only (no `?token=`). |
+| GET | `/api/books/{id}/pages` | `?lang=` | `PageInfo[]` `{page, width, height, has_text_layer, translatable_blocks, translated}` for every page. Never extracts: `has_text_layer` comes from the DB once extracted, else from whether the page uses a font; `translatable_blocks` is null until the page is extracted; `translated` = status `done` for the default lang/provider/model. ~0.1 s for 670 pages (cached per open book). |
+| GET | `/api/books/{id}/pages/{n}/html` | (unchanged) | `PageHtml` gains `width`, `height` (pt), `has_text_layer` and `content_box: [x0,y0,x1,y1] \| null` (pt, union of non-furniture blocks; same shape as block `bbox`). |
+| GET | `/api/books/{id}/html` | `?pages=59-61` or `59,60` (≤ 10 pages) `&mode=&lang=` | `{pages: PageHtml[]}` sorted by page; each item identical to the single-page response. 400 for a bad/too long spec or an out-of-range page. |
+| GET | `/api/books/{id}/pages/{n}/estimate_hint` | `?lang=` | `EstimateHint {page, provider, model, calls, input_tokens, output_tokens, usd, price_known, thinking, total_blocks, cached_blocks, has_text_layer, seconds_hint}` — display only (the "≈ $0.02" on an untranslated sheet). Same plan as `/estimate`, but **no `confirm_token` is issued and no AI runs**; translating still requires `/estimate` → CostModal → `/translate`. `seconds_hint` is a rough guess (0 when nothing to translate). |
+
+HTML builder changes: a level-1 heading starting with `CHAPTER|Chapter|BÖLÜM|Bölüm|PART|KISIM N`
+renders the label as `<span class="h-label">CHAPTER 1</span>` followed by the title (tr and learn).
+`learn` mode emits the same `<img src="assets/…">` crops as `tr`; unknown words are
+`<ruby class="w unknown" data-w data-l>word<rt>meaning</rt></ruby>` wrapping only the word.
+
 ### Translation
 | Method | Path | Body | Response |
 |---|---|---|---|

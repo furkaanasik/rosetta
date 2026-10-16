@@ -3,7 +3,10 @@ import { createRoot } from "react-dom/client";
 import type { EngineApi } from "./api/engine";
 import { App } from "./App";
 import { connectEngine } from "./lib/engineConnect";
-import "./styles/app.css";
+import "./styles/index.css";
+import { applyTheme } from "./ui/theme";
+
+applyTheme();
 
 function Root() {
   const [conn, setConn] = useState<{ api: EngineApi | null; mock: boolean; error?: string } | null>(null);
@@ -12,7 +15,7 @@ function Root() {
       .then((c) => setConn(c))
       .catch((e: unknown) => setConn({ api: null, mock: false, error: String(e) }));
   }, []);
-  if (!conn) return <div className="splash">Rosetta başlatılıyor…</div>;
+  if (!conn) return <div className="splash">Rosetta açılıyor…</div>;
   return <App api={conn.api} mock={conn.mock} engineError={conn.error ?? null} />;
 }
 

@@ -335,3 +335,23 @@ def test_review_keeps_list_numbering(tmp_path: Path) -> None:
     assert html.count('<ol class="list" start="6">') == 2  # EN and TR cells
     assert html.count('value="6"') == 2
     assert html.count(">❻</span>") == 2
+
+
+def test_chapter_heading_label_span(tmp_path: Path) -> None:
+    h = mk(0, BlockType.HEADING, "CHAPTER 1 Trade-Offs in Data Systems", level=1)
+    h2 = mk(1, BlockType.HEADING, "Chapter 2 is not a level-1 heading", level=2)
+    page = page_of(h, h2)
+
+    en = build_page_html(BOOK, page, {}, "tr", tmp_path)
+    assert '<span class="h-label">CHAPTER 1</span> Trade-Offs in Data Systems' in en
+    assert 'h-label">Chapter 2' not in en
+
+    t = {h.text_hash: tr(h, "BÖLÜM 1 Veri Sistemlerinde <Ödünleşimler>")}
+    html = build_page_html(BOOK, page, t, "tr", tmp_path)
+    assert '<span class="h-label">BÖLÜM 1</span> Veri Sistemlerinde &lt;Ödünleşimler&gt;' in html
+
+
+def test_heading_without_label_unchanged(tmp_path: Path) -> None:
+    h = mk(0, BlockType.HEADING, "Replication", level=1)
+    html = build_page_html(BOOK, page_of(h), {}, "tr", tmp_path)
+    assert "h-label" not in html and ">Replication</span></h1>" in html

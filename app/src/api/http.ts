@@ -6,6 +6,7 @@ import {
   type BookProfile,
   type EngineInfo,
   type Estimate,
+  type EstimateHint,
   type Explanation,
   type ExplainRequest,
   type ExportRequest,
@@ -14,9 +15,12 @@ import {
   type Job,
   type JobEstimateRequest,
   type LearnStats,
+  type LibraryBook,
   type LookupResult,
   type PageBlocks,
   type PageHtml,
+  type PageInfo,
+  type PagesHtml,
   type Rating,
   type ReviewCard,
   type TermInfo,
@@ -125,17 +129,46 @@ export class HttpEngineApi implements EngineApi {
       lang,
     });
   }
-  async assetBlob(bookId: number, name: string): Promise<Blob> {
+  /** Binary GET with the bearer header (the token never goes into a URL). */
+  private async blob(path: string, what: string, query?: Query): Promise<Blob> {
     let res: Response;
     try {
-      res = await this.fetchFn(this.url(`/api/books/${bookId}/assets/${encodeURIComponent(name)}`), {
+      res = await this.fetchFn(this.url(path, query), {
         headers: { Authorization: `Bearer ${this.token}` },
       });
     } catch (e) {
       throw new EngineError("unavailable", `Motora ulaşılamıyor: ${String(e)}`);
     }
-    if (!res.ok) throw new EngineError("not_found", `Görsel yüklenemedi: ${name}`);
+    if (!res.ok) throw new EngineError("not_found", `${what} yüklenemedi`, res.status);
     return res.blob();
+  }
+  assetBlob(bookId: number, name: string): Promise<Blob> {
+    return this.blob(`/api/books/${bookId}/assets/${encodeURIComponent(name)}`, `Görsel (${name})`);
+  }
+
+  listBooks() {
+    return this.call<LibraryBook[]>("GET", "/api/books");
+  }
+  pages(bookId: number) {
+    return this.call<PageInfo[]>("GET", `/api/books/${bookId}/pages`);
+  }
+  async saveProgress(bookId: number, page: number): Promise<void> {
+    await this.call<unknown>("PUT", `/api/books/${bookId}/progress`, { page });
+  }
+  coverBlob(bookId: number, width?: number): Promise<Blob> {
+    return this.blob(`/api/books/${bookId}/cover`, "Kapak", { w: width });
+  }
+  async pagesHtml(bookId: number, pages: number[], mode: HtmlMode, lang?: string): Promise<PageHtml[]> {
+    if (pages.length === 0) return [];
+    const res = await this.call<PagesHtml>("GET", `/api/books/${bookId}/html`, undefined, {
+      pages: pages.join(","),
+      mode,
+      lang,
+    });
+    return res.pages;
+  }
+  estimateHint(bookId: number, page: number) {
+    return this.call<EstimateHint>("GET", `/api/books/${bookId}/pages/${page}/estimate_hint`);
   }
 
   estimateTranslate(bookId: number, req: TranslateEstimateRequest) {

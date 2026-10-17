@@ -58,9 +58,13 @@ def _watch_stdin(server: Any) -> None:
     if not _stdin_is_pipe():
         return
 
+    # Read the raw fd, not sys.stdin.buffer: a daemon thread blocked inside BufferedReader
+    # holds its lock, and interpreter shutdown (e.g. after SIGTERM) then aborts the process.
+    fd = sys.stdin.fileno()
+
     def watch() -> None:
         try:
-            while sys.stdin.buffer.read(65536):
+            while os.read(fd, 65536):
                 pass
         except (OSError, ValueError):
             pass

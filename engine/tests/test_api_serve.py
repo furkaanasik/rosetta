@@ -161,6 +161,32 @@ def test_serve_handles_sigterm_gracefully(tmp_path: Path) -> None:
     assert proc.wait(15) == 0
 
 
+def test_serve_sigterm_with_stdin_pipe_does_not_abort(tmp_path: Path) -> None:
+    """The desktop app keeps a pipe on stdin and stops the engine with SIGTERM. The stdin
+    watcher must not hold the sys.stdin buffer lock, or interpreter shutdown aborts (SIGABRT,
+    core dump) with "_enter_buffered_busy: could not acquire lock"."""
+    proc = subprocess.Popen(
+        [sys.executable, "-c", LAUNCH, "serve", "--port", "0", "--token", "t"],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=_env(tmp_path),
+    )
+    try:
+        assert proc.stdout is not None and proc.stderr is not None
+        json.loads(proc.stdout.readline())
+        proc.terminate()
+        assert proc.wait(15) == 0
+        assert "Fatal Python error" not in proc.stderr.read()
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait(10)
+        if proc.stdin is not None:
+            proc.stdin.close()
+
+
 def test_dev_fake_ai_refused_without_temp_data_dir(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("ROSETTA_DATA_DIR", raising=False)
 

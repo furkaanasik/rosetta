@@ -5,6 +5,7 @@ import {
   type BookInfo,
   type BookProfile,
   type ClaudeCandidate,
+  type ConsistencyReport,
   type Diagnostics,
   type EngineInfo,
   type Estimate,
@@ -27,6 +28,7 @@ import {
   type ReviewCard,
   type SettingsPatch,
   type SettingsView,
+  type TermAcceptResult,
   type TermInfo,
   type TocEntry,
   type TranslateEstimateRequest,
@@ -235,6 +237,26 @@ export class HttpEngineApi implements EngineApi {
 
   exportPdf(bookId: number, req: ExportRequest) {
     return this.call<ExportResult>("POST", `/api/books/${bookId}/export`, req);
+  }
+
+  consistency(bookId: number) {
+    return this.call<ConsistencyReport>("GET", `/api/books/${bookId}/consistency`);
+  }
+  acceptTerm(bookId: number, term: string, tr: string) {
+    return this.call<TermAcceptResult>("POST", `/api/books/${bookId}/consistency/accept`, { term, tr });
+  }
+  async ignoreTerm(bookId: number, term: string) {
+    const r = await this.call<{ ignored: string[] }>("POST", `/api/books/${bookId}/consistency/ignore`, { term });
+    return r.ignored;
+  }
+  async unignoreTerm(bookId: number, term: string) {
+    const r = await this.call<{ ignored: string[] }>(
+      "DELETE",
+      `/api/books/${bookId}/consistency/ignore`,
+      undefined,
+      { term },
+    );
+    return r.ignored;
   }
 
   lookup(query: string) {

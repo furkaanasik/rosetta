@@ -54,3 +54,8 @@ main.review .row:has(h1) { break-before: page; }
 .src-page:first-of-type main.review .row:has(h1) { break-before: auto; }
 main.review h1 { break-before: auto; }
 .untranslated-note { color: var(--muted); }
+
+/* Paragraph joined across a page break: the continuation starts flush; an empty tail is hidden */
+main.page .joined-empty { display: none; }
+p.cont-prev { text-indent: 0 !important; }
+.joined-note { color: var(--muted); font-style: italic; }

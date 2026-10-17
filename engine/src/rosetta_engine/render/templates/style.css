@@ -46,6 +46,10 @@ figure { margin: 1.5rem 0; }
 figure img { display: block; max-width: 100%; height: auto; margin: 0 auto; }
 figcaption { font-style: italic; color: var(--muted); margin: .4rem 0; }
 [role="img"] { padding: 2rem; text-align: center; border: 1px dashed var(--rule); color: var(--muted); }
+/* Paragraph joined across a page break: its translation may sit wholly on the previous page. */
+main.page .joined-empty { display: none; }
+main.page p.cont-prev { text-indent: 0; }
+.joined-note { color: var(--muted); font-style: italic; }
 .untranslated { opacity: .75; border-left: 3px dashed var(--accent); padding-left: .6rem; }
 aside.footnotes { margin-top: 2.5rem; padding-top: .8rem; border-top: 1px solid var(--rule); font-size: .85em; }
 

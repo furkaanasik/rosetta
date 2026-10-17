@@ -47,3 +47,28 @@ describe("v2 reader endpoints (mock)", () => {
     });
   });
 });
+
+describe("term consistency endpoints (HTTP client)", () => {
+  it("uses the consistency routes; accept/ignore send JSON, unignore a query", async () => {
+    const { fn, calls } = fakeFetch({ ignored: ["leader"], profile: {}, affected: [], affected_count: 0 });
+    const api = new HttpEngineApi({ baseUrl: "http://x", token: "t" }, fn);
+    await api.consistency(3);
+    await api.acceptTerm(3, "leader", "lider");
+    expect(await api.ignoreTerm(3, "leader")).toEqual(["leader"]);
+    await api.unignoreTerm(3, "leader");
+    expect(calls.map((c) => [c.init.method, c.url])).toEqual([
+      ["GET", "http://x/api/books/3/consistency"],
+      ["POST", "http://x/api/books/3/consistency/accept"],
+      ["POST", "http://x/api/books/3/consistency/ignore"],
+      ["DELETE", "http://x/api/books/3/consistency/ignore?term=leader"],
+    ]);
+    expect(JSON.parse(String(calls[1]?.init.body))).toEqual({ term: "leader", tr: "lider" });
+  });
+
+  it("targeted estimate posts the block list", async () => {
+    const { fn, calls } = fakeFetch({ confirm_token: "c" });
+    const api = new HttpEngineApi({ baseUrl: "http://x", token: "t" }, fn);
+    await api.estimateTranslate(3, { pages: [], blocks: [{ page: 4, text_hash: "ab" }] });
+    expect(JSON.parse(String(calls[0]?.init.body))).toEqual({ pages: [], blocks: [{ page: 4, text_hash: "ab" }] });
+  });
+});

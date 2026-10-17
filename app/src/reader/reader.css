@@ -591,6 +591,22 @@
 .rs-sheet--book .rs-html .rs-cut {
   text-align-last: justify;
 }
+/* Paragraph joined across a PDF page break (translated as one unit): the continuation on the
+   next page starts flush, the head keeps its last line full, an empty tail (its translation is
+   wholly on the previous page) is hidden — except side by side, where it carries a note. */
+.rs-sheet--book .rs-html p.cont-prev {
+  text-indent: 0 !important;
+}
+.rs-sheet--book .rs-html p.cont-next:last-child {
+  text-align-last: justify;
+}
+.rs-html:not(.mode-review) .joined-empty {
+  display: none;
+}
+.rs-html .joined-note {
+  color: var(--ink-3);
+  font-style: italic;
+}
 /* Space around anything that isn't a running paragraph. */
 .rs-sheet--book .rs-html :where(pre, figure, ul, ol, aside, .aside, h1, h2, h3, h4, h5, h6) + p.b-paragraph,
 .rs-sheet--book .rs-html p.b-paragraph + :where(pre, figure, ul, ol, aside, .aside, h2, h3, h4, h5, h6) {

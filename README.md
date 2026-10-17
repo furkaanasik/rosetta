@@ -295,6 +295,7 @@ npm run e2e            # Playwright: gerçek motor (sahte AI) + Vite, sistem Chr
 | [docs/faz6-ogrenme.md](docs/faz6-ogrenme.md) | Sözlük, kelime defteri, FSRS, öğrenme modu |
 | [docs/faz7-acikla.md](docs/faz7-acikla.md) | "Bunu açıkla" |
 | [docs/faz8-saglayicilar.md](docs/faz8-saglayicilar.md) | DeepL ve Ollama |
+| [docs/kalite.md](docs/kalite.md) | Sayfa sonu paragraf devamı, terim tutarlılığı denetimi |
 | [docs/paketleme.md](docs/paketleme.md) | PyInstaller, AppImage, .deb |
 
 ## Lisanslar

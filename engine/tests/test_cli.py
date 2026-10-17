@@ -435,3 +435,50 @@ def test_malformed_config_is_friendly_error(
     assert result.exit_code == 1
     assert "geçersiz ayar dosyası" in _flat(result.output)
     assert result.exception is None or isinstance(result.exception, SystemExit)
+
+
+def _seed_variants(pdf: Path) -> None:
+    """Extract pages 1-3 (no AI) and cache hand-written translations (conftest.TERMS_PAGES)."""
+    from conftest import seed_terms
+
+    from rosetta_engine import config
+    from rosetta_engine.store import db
+    from rosetta_engine.store.repo import Repos
+
+    runner.invoke(cli.app, ["estimate", str(pdf), "--pages", "1-3", "--provider", "fake"])
+    conn = db.connect(config.db_path())
+    db.migrate(conn)
+    seed_terms(Repos.from_conn(conn), int(conn.execute("SELECT id FROM books").fetchone()[0]))
+    conn.close()
+
+
+def test_consistency_reports_and_accepts_without_ai(terms_pdf: Path, fake: FakeTranslator) -> None:
+    book_pdf = terms_pdf
+    _seed_variants(book_pdf)
+
+    shown = runner.invoke(cli.app, ["consistency", str(book_pdf), "--provider", "fake"])
+    assert shown.exit_code == 0, shown.output
+    out = _flat(shown.output)
+    assert "olası tutarsızlık" in out and "replication" in out
+    assert "çoğaltma ×6" in out and "replikasyon ×3" in out
+
+    accepted = runner.invoke(
+        cli.app,
+        ["consistency", str(book_pdf), "--provider", "fake", "--accept", "replication=çoğaltma"],
+    )
+    assert accepted.exit_code == 0, accepted.output
+    assert "Sözlüğe eklendi" in accepted.output
+    assert "sözlük: çoğaltma" in _flat(accepted.output)
+    assert fake.calls == []
+
+    ignored = runner.invoke(
+        cli.app, ["consistency", str(book_pdf), "--provider", "fake", "--ignore", "replication"]
+    )
+    assert "replication" not in _flat(ignored.output).split("tarandı", 1)[1]
+
+
+def test_consistency_empty_and_bad_accept(book_pdf: Path) -> None:
+    empty = runner.invoke(cli.app, ["consistency", str(book_pdf), "--provider", "fake"])
+    assert empty.exit_code == 0 and "Henüz çevrilmiş sayfa yok" in empty.output
+    bad = runner.invoke(cli.app, ["consistency", str(book_pdf), "--accept", "nope"])
+    assert bad.exit_code == 1

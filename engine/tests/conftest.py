@@ -87,6 +87,99 @@ def book_pdf(tmp_path: Path) -> Path:
     return out
 
 
+SPLIT_HEAD = (
+    "Many systems today are distributed. Some of them were not designed with the cloud in "
+    "mind. Others, however, were designed from the ground up to be"
+)
+SPLIT_TAIL = (
+    "cloud native and have been shown to scale well. They also recover from faults quickly. "
+    "Operators like them."
+)
+
+
+@pytest.fixture
+def split_pdf(tmp_path: Path) -> Path:
+    """Three pages; the last paragraph of page 1 continues on page 2 (lower-case start)."""
+    doc = _doc()
+    page = doc.new_page()
+    page.insert_text((50, 90), "Chapter 1. Foundations", fontname="tibo", fontsize=18)
+    page.insert_textbox(pymupdf.Rect(50, 105, 545, 185), LOREM, fontname="tiro", fontsize=10)
+    page.insert_textbox(pymupdf.Rect(50, 195, 545, 260), SPLIT_HEAD, fontname="tiro", fontsize=10)
+    page = doc.new_page()
+    page.insert_textbox(pymupdf.Rect(50, 60, 545, 140), SPLIT_TAIL, fontname="tiro", fontsize=10)
+    page.insert_textbox(pymupdf.Rect(50, 150, 545, 230), LOREM, fontname="tiro", fontsize=10)
+    page = doc.new_page()
+    page.insert_textbox(pymupdf.Rect(50, 60, 545, 140), LOREM, fontname="tiro", fontsize=10)
+    out = tmp_path / "split.pdf"
+    doc.save(out)
+    return out
+
+
+# Term-consistency fixture: 9 distinct "replication" paragraphs (3 per page) and their
+# translations; pages 1-2 say "çoğaltma", page 3 says "replikasyon".
+TERMS_PAGES = [
+    [
+        ("Replication keeps copies of the data on several machines.",
+         "Çoğaltma, verinin kopyalarını birkaç makinede tutar."),
+        ("We discuss replication in depth in this chapter.",
+         "Bu bölümde çoğaltmanın ayrıntılarını tartışıyoruz."),
+        ("Replication helps with availability during outages.",
+         "Çoğaltmayı kesintiler sırasında erişilebilirlik için kullanırız."),
+    ],
+    [
+        ("Synchronous replication is slow but safe.",
+         "Eşzamanlı çoğaltma yavaştır ama güvenlidir."),
+        ("Replication lag is a common problem for readers.",
+         "Çoğaltma gecikmesi okuyucular için yaygın bir sorundur."),
+        ("Chained replication forwards every write.", "Zincirli çoğaltma her yazmayı iletir."),
+    ],
+    [
+        ("Leaderless replication is popular in some stores.",
+         "Liderli olmayan replikasyon bazı depolarda popülerdir."),
+        ("Replication across regions is hard to operate.",
+         "Bölgeler arası replikasyonu işletmek zordur."),
+        ("Asynchronous replication may lose recent writes.",
+         "Asenkron replikasyon son yazmaları kaybedebilir."),
+    ],
+]  # fmt: skip
+
+
+@pytest.fixture
+def terms_pdf(tmp_path: Path) -> Path:
+    doc = _doc()
+    for paragraphs in TERMS_PAGES:
+        page = doc.new_page()
+        for n, (en, _) in enumerate(paragraphs):
+            top = 80 + n * 60
+            page.insert_textbox(
+                pymupdf.Rect(50, top, 545, top + 40), en, fontname="tiro", fontsize=10
+            )
+    out = tmp_path / "terms.pdf"
+    doc.save(out)
+    return out
+
+
+def seed_terms(repos: Any, book_id: int, provider: str = "fake", model: str = "fake") -> None:
+    """Cache the TERMS_PAGES translations for an extracted ``terms_pdf`` book."""
+    from rosetta_engine.store.repo import TranslationRow
+
+    by_en = {en: tr for paragraphs in TERMS_PAGES for en, tr in paragraphs}
+    rows = []
+    for p in range(len(TERMS_PAGES)):
+        page = repos.blocks.get_page(book_id, p)
+        assert page is not None
+        for b in page.blocks:
+            if b.text in by_en:
+                tr = by_en[b.text]
+                rows.append(
+                    TranslationRow(
+                        book_id, p, b.text_hash, "tr", provider, model, tr, [tr], True, 1
+                    )
+                )
+    assert len(rows) == sum(len(x) for x in TERMS_PAGES), [b.text for b in page.blocks]
+    repos.translations.put_rows(rows)
+
+
 @pytest.fixture
 def two_column_pdf(tmp_path: Path) -> Path:
     doc = _doc()

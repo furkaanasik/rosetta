@@ -355,3 +355,38 @@ def test_heading_without_label_unchanged(tmp_path: Path) -> None:
     h = mk(0, BlockType.HEADING, "Replication", level=1)
     html = build_page_html(BOOK, page_of(h), {}, "tr", tmp_path)
     assert "h-label" not in html and ">Replication</span></h1>" in html
+
+
+def _role(t: Translation, role: str, *, empty: bool = False) -> Translation:
+    update: dict[str, Any] = {"unit_hash": "u1", "unit_role": role}
+    if empty:
+        update |= {"sentences": [], "text": ""}
+    return t.model_copy(update=update)
+
+
+def test_joined_head_and_tail_classes(tmp_path: Path) -> None:
+    head = mk(0, BlockType.PARAGRAPH, "They were built to be")
+    tail = mk(0, BlockType.PARAGRAPH, "cloud native. It works.", page_no=1)
+
+    head_html = render(page_of(head), tmp_path, [_role(tr(head, "Buluta özgü olacak."), "head")])
+    tail_html = render(page_of(tail, page_no=1), tmp_path, [_role(tr(tail, "Çalışıyor."), "tail")])
+
+    assert "cont-next" in head_html and "Buluta özgü olacak." in head_html
+    assert "cont-prev" in tail_html and "joined-empty" not in tail_html
+    assert "Çalışıyor." in tail_html
+
+
+def test_empty_tail_hides_original_in_tr_and_notes_in_review(tmp_path: Path) -> None:
+    tail = mk(0, BlockType.PARAGRAPH, "cloud native.", page_no=1)
+    trs = [_role(tr(tail, "x"), "tail", empty=True)]
+
+    html = render(page_of(tail, page_no=1), tmp_path, trs)
+    assert "cont-prev joined-empty" in html
+    assert "cloud native." not in html  # nothing from the original leaks into the TR page
+
+    review = render(page_of(tail, page_no=1), tmp_path, trs, mode="review")
+    assert "↑ önceki sayfada" in review
+    assert "cloud native." in review  # the EN cell keeps the original
+
+    learn = render(page_of(tail, page_no=1), tmp_path, trs, mode="learn")
+    assert "joined-empty" not in learn

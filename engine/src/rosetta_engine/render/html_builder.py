@@ -308,7 +308,15 @@ def _view(
         t = translations.get(block.text_hash)
         if t is None:
             classes.append("untranslated")
+        elif t.unit_role == "tail" and not t.sentences and not t.text:
+            # The paragraph's translation sits wholly on the previous page (joined unit).
+            classes.extend(["cont-prev", "joined-empty"])
+            tr = TextView([], aligned=t.sentence_aligned)
         else:
+            if t.unit_role == "head":
+                classes.append("cont-next")
+            elif t.unit_role == "tail":
+                classes.append("cont-prev")
             tr = TextView(_spans(t.sentences, t.text, tr_fmt), aligned=t.sentence_aligned)
 
     tag = "p"

@@ -1,7 +1,7 @@
 import type { BookInfo, ViewMode } from "./api/types";
 
 export type Screen = "library" | "reader";
-export type SidePanel = "toc" | "jobs" | "words" | "profile";
+export type SidePanel = "toc" | "jobs" | "words" | "profile" | "consistency";
 
 export interface AppState {
   screen: Screen;
@@ -97,4 +97,5 @@ export const PANEL_LABELS: Record<SidePanel, string> = {
   jobs: "İşler",
   words: "Kelimeler",
   profile: "Profil",
+  consistency: "Tutarlılık",
 };

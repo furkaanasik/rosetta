@@ -11,7 +11,7 @@
 {% else %}
 <div class="row{% if v.tr is none %} missing{% endif %}" data-aligned="{{ 1 if v.tr is not none and v.tr.aligned else 0 }}">
 <div class="cell en">{% if v.kind == "list_item" %}{{ lone_item(v, v.en) }}{% else %}{{ block(v, v.en) }}{% endif %}</div>
-<div class="cell tr">{% if v.tr is not none %}{% if v.kind == "list_item" %}{{ lone_item(v, v.tr) }}{% else %}{{ block(v, v.tr) }}{% endif %}{% else %}<p class="untranslated-note">—</p>{% endif %}</div>
+<div class="cell tr">{% if v.tr is not none and "joined-empty" in v.classes.split() %}<p class="joined-note">↑ önceki sayfada</p>{% elif v.tr is not none %}{% if v.kind == "list_item" %}{{ lone_item(v, v.tr) }}{% else %}{{ block(v, v.tr) }}{% endif %}{% else %}<p class="untranslated-note">—</p>{% endif %}</div>
 </div>
 {% endif %}
 {% endfor %}

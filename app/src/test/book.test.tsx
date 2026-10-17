@@ -245,3 +245,25 @@ describe("resume where the reader left off", () => {
     expect(saved).toEqual([4, 5]);
   });
 });
+
+describe("paragraph joined across a PDF page break", () => {
+  it("keeps the continuation classes through sanitizing and slicing", async () => {
+    const { sanitizeEngineHtml } = await import("../lib/sanitize");
+    const html = sanitizeEngineHtml(
+      '<main class="page" data-page="38"><p data-block="38-0" class="b-paragraph cont-prev">şekilde tasarlanan.</p>' +
+        '<p data-block="38-1" class="b-paragraph ff-serif cont-prev joined-empty"></p></main>',
+    );
+    const root = document.createElement("div");
+    root.innerHTML = html;
+    const [cont, empty] = Array.from(root.querySelectorAll("p"));
+    expect(cont!.classList.contains("cont-prev")).toBe(true);
+    expect(empty!.className).toContain("joined-empty");
+  });
+
+  it("reader CSS starts a continuation flush and hides an empty tail outside side-by-side", async () => {
+    const { readFileSync } = await import("node:fs");
+    const css = readFileSync(`${process.cwd()}/src/reader/reader.css`, "utf8");
+    expect(css).toMatch(/p\.cont-prev\s*\{\s*text-indent:\s*0 !important;/);
+    expect(css).toMatch(/\.rs-html:not\(\.mode-review\) \.joined-empty\s*\{\s*display:\s*none;/);
+  });
+});

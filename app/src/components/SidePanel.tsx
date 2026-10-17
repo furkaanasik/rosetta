@@ -13,16 +13,17 @@ interface Props {
   jobs: ReactNode;
   words: ReactNode;
   profile: ReactNode;
+  consistency: ReactNode;
 }
 
-const TABS: Tab[] = ["toc", "jobs", "words", "profile"];
+const TABS: Tab[] = ["toc", "jobs", "words", "profile", "consistency"];
 
 /**
  * Slide-over panel from the right (closed by default). It stays mounted while closed — inert
  * and off-screen — so the jobs tab keeps polling running jobs and the pages refresh.
  */
-export function SidePanel({ open, tab, onTab, onClose, toc, jobs, words, profile }: Props) {
-  const content: Record<Tab, ReactNode> = { toc, jobs, words, profile };
+export function SidePanel({ open, tab, onTab, onClose, toc, jobs, words, profile, consistency }: Props) {
+  const content: Record<Tab, ReactNode> = { toc, jobs, words, profile, consistency };
   return (
     <aside className="side-panel" data-open={open} aria-label="Yan panel" aria-hidden={!open} inert={!open}>
       <Tabs.Root value={tab} onValueChange={(v) => onTab(v as Tab)} className="side-panel__inner">

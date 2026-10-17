@@ -12,7 +12,7 @@ import pytest
 
 from rosetta_engine.config import Settings
 from rosetta_engine.errors import ExtractionError, RosettaError
-from rosetta_engine.models import TRANSLATABLE, Batch, BlockType
+from rosetta_engine.models import TRANSLATABLE, Batch, BlockType, BookProfile
 from rosetta_engine.store import db
 from rosetta_engine.store.repo import Repos
 from rosetta_engine.translate import service as service_mod
@@ -526,3 +526,230 @@ def test_batch_cached_meanwhile_is_not_paid_again(repos: Repos, book_pdf: Path) 
 
     assert len(fake.calls) == 1
     assert report.done_pages == [0, 1]
+
+
+# --- page-break paragraph joins ------------------------------------------------------------
+
+
+def _units(plan: Any) -> list[Any]:
+    return [u for batch in plan.batches for u in batch.joins.values()]
+
+
+def _rows(repos: Repos, page: int) -> dict[str, Any]:
+    book_id = report_book_id(repos)
+    return repos.translations.for_page(book_id, page, "tr", "fake", "fake")
+
+
+def test_split_paragraph_is_one_item(repos: Repos, split_pdf: Path) -> None:
+    svc, _ = _service(repos)
+    plan = _plan(svc, split_pdf, [0, 1, 2])
+
+    assert plan.joined_units == 1
+    (unit,) = _units(plan)
+    items = [i for b in plan.batches for i in svc._request(b.blocks, [], "tr", BookProfile()).items]
+    merged = [i for i in items if i.sentences == unit.merged_sentences]
+    assert len(merged) == 1
+    assert any("ground up to be cloud native" in s for s in unit.merged_sentences)
+    # The merged unit counts once; the two halves are not planned separately.
+    sent = [s for i in items for s in i.sentences]
+    assert not any(s.startswith("cloud native") for s in sent)
+    assert plan.total_blocks == sum(len(b.blocks) for b in plan.batches)
+
+
+@pytest.mark.parametrize("pages", [[0], [1]])
+def test_neighbour_half_is_pulled_in(repos: Repos, split_pdf: Path, pages: list[int]) -> None:
+    svc, _ = _service(repos)
+    plan = _plan(svc, split_pdf, pages)
+
+    assert plan.pages == pages
+    (unit,) = _units(plan)
+    assert (unit.head_page, unit.tail_page) == (0, 1)
+    assert any(b.sentences == unit.merged_sentences for batch in plan.batches for b in batch.blocks)
+
+
+def test_joined_unit_stored_as_head_and_tail(repos: Repos, split_pdf: Path) -> None:
+    svc, fake = _service(repos)
+    plan = _plan(svc, split_pdf, [0, 1, 2])
+    (unit,) = _units(plan)
+    report = svc.execute(plan)
+
+    assert report.done_pages == [0, 1, 2]
+    head = _rows(repos, 0)[unit.head_hash]
+    tail = _rows(repos, 1)[unit.tail_hash]
+    assert (head.unit_role, tail.unit_role) == ("head", "tail")
+    assert head.unit_hash == tail.unit_hash == unit.unit_hash
+    assert len(head.sentences) == unit.head_count == 3
+    assert (
+        head.sentences[-1].startswith("[TR] Others, however")
+        and "cloud native" in (head.sentences[-1])
+    )
+    assert tail.sentences == [
+        "[TR] They also recover from faults quickly.",
+        "[TR] Operators like them.",
+    ]
+    assert head.sentence_aligned and tail.sentence_aligned
+
+    fake.calls.clear()
+    again = _plan(svc, split_pdf, [0, 1, 2])
+    assert again.batches == [] and fake.calls == []
+    assert again.cached_blocks == again.total_blocks
+
+
+def test_out_of_scope_neighbour_gets_rows_but_no_status(repos: Repos, split_pdf: Path) -> None:
+    svc, _ = _service(repos)
+    plan = _plan(svc, split_pdf, [0])
+    (unit,) = _units(plan)
+    report = svc.execute(plan)
+
+    assert report.done_pages == [0]
+    assert unit.tail_hash in _rows(repos, 1)
+    assert repos.page_status.get(report_book_id(repos), 1, "tr", "fake", "fake") is None
+    # Page 1 later: its tail is cached, only the rest is translated.
+    plan1 = _plan(svc, split_pdf, [1])
+    assert plan1.cached_blocks == 1
+    assert all(u.unit_hash != unit.unit_hash for u in _units(plan1))
+
+
+def test_only_tail_in_scope_writes_head_row_too(repos: Repos, split_pdf: Path) -> None:
+    svc, _ = _service(repos)
+    plan = _plan(svc, split_pdf, [1])
+    (unit,) = _units(plan)
+    report = svc.execute(plan)
+
+    assert report.done_pages == [1]
+    assert _rows(repos, 0)[unit.head_hash].unit_role == "head"
+    assert repos.page_status.get(report_book_id(repos), 0, "tr", "fake", "fake") is None
+
+
+def _seed(repos: Repos, page: int, h: str, unit_hash: str | None = None) -> None:
+    from rosetta_engine.store.repo import TranslationRow
+
+    repos.translations.put_rows(
+        [
+            TranslationRow(
+                book_id=report_book_id(repos),
+                page_no=page,
+                text_hash=h,
+                lang="tr",
+                provider="fake",
+                model="fake",
+                text="eski",
+                sentences=["eski"],
+                sentence_aligned=True,
+                prompt_version=1,
+                unit_hash=unit_hash,
+            )
+        ]
+    )
+
+
+def test_legacy_pair_translated_alone_counts_as_cached(repos: Repos, split_pdf: Path) -> None:
+    svc, _ = _service(repos)
+    (unit,) = _units(_plan(svc, split_pdf, [0, 1]))
+    _seed(repos, 0, unit.head_hash)
+    _seed(repos, 1, unit.tail_hash)
+
+    plan = _plan(svc, split_pdf, [0, 1])
+
+    assert _units(plan) == []
+    assert plan.cached_blocks == 1
+
+
+def test_one_legacy_half_retranslates_the_unit(repos: Repos, split_pdf: Path) -> None:
+    svc, _ = _service(repos)
+    (unit,) = _units(_plan(svc, split_pdf, [0]))
+    _seed(repos, 0, unit.head_hash)
+
+    plan = _plan(svc, split_pdf, [0])
+    assert [u.unit_hash for u in _units(plan)] == [unit.unit_hash]
+    svc.execute(plan)
+
+    head = _rows(repos, 0)[unit.head_hash]
+    assert head.text != "eski" and head.unit_hash == unit.unit_hash
+
+
+def test_misaligned_unit_goes_to_head(repos: Repos, split_pdf: Path) -> None:
+    from rosetta_engine.translate.base import ParsedItem, ProviderResult, TranslationRequest
+
+    class Short(FakeTranslator):
+        def translate(self, request: TranslationRequest, *, strict: bool = False) -> ProviderResult:
+            res = super().translate(request, strict=strict)
+            items = {
+                k: ParsedItem(id=k, sentences=v.sentences[:-1] or v.sentences, aligned=True)
+                for k, v in res.items.items()
+            }
+            return res.model_copy(update={"items": items})
+
+    svc = PageTranslationService(Short(), repos, service_mod.Settings())
+    plan = _plan(svc, split_pdf, [0, 1])
+    (unit,) = _units(plan)
+    svc.execute(plan)
+
+    head = _rows(repos, 0)[unit.head_hash]
+    tail = _rows(repos, 1)[unit.tail_hash]
+    assert len(head.sentences) == len(unit.merged_sentences) - 1
+    assert tail.sentences == [] and tail.text == ""
+    assert not head.sentence_aligned and not tail.sentence_aligned
+
+
+def test_stopped_run_writes_no_half_unit(repos: Repos, split_pdf: Path) -> None:
+    svc, _ = _service(repos, fail_mode="limit")
+    plan = _plan(svc, split_pdf, [0, 1])
+    report = svc.execute(plan)
+
+    assert report.stop_kind == "usage_limit"
+    assert _rows(repos, 0) == {} and _rows(repos, 1) == {}
+
+
+# --- targeted (only_blocks) re-translation ---------------------------------------------------
+
+
+def test_targeted_plan_replaces_one_row_and_keeps_status(repos: Repos, book_pdf: Path) -> None:
+    svc, fake = _service(repos)
+    svc.execute(_plan(svc, book_pdf, [0]))
+    book_id = report_book_id(repos)
+    before = _rows(repos, 0)
+    target = next(iter(before))
+    repos.page_status.set(
+        service_mod.PageStatusRow(book_id, 0, "tr", "fake", "fake", "failed", "x")
+    )
+    fake.calls.clear()
+    fake.prefix = "[YENİ] "
+
+    plan = _plan(svc, book_pdf, [], only_blocks=frozenset({(0, target)}))
+    assert plan.targeted and plan.pages == [0]
+    assert plan.total_blocks == 1 and plan.cached_blocks == 0
+    report = svc.execute(plan)
+
+    assert [len(req.items) for req, _ in fake.calls] == [1]
+    after = _rows(repos, 0)
+    assert after[target].text.startswith("[YENİ] ")
+    assert all(after[h].text == before[h].text for h in before if h != target)
+    status = repos.page_status.get(book_id, 0, "tr", "fake", "fake")
+    assert status is not None and status.status == "failed"  # untouched
+    assert report.done_pages == [0]
+
+
+def test_targeted_plan_never_marks_partial_page_done(repos: Repos, book_pdf: Path) -> None:
+    svc, _ = _service(repos)
+    book, doc, meta = svc.open_book(book_pdf)
+    page = svc.ensure_pages(book, doc, meta, [1])[1]
+    first = next(b for b in page.blocks if b.translatable)
+
+    svc.execute(svc.plan(book, doc, meta, [], "tr", only_blocks=frozenset({(1, first.text_hash)})))
+
+    assert repos.page_status.get(book.id, 1, "tr", "fake", "fake") is None
+    assert list(_rows(repos, 1)) == [first.text_hash]
+
+
+def test_targeted_tail_takes_the_whole_unit(repos: Repos, split_pdf: Path) -> None:
+    svc, fake = _service(repos)
+    (unit,) = _units(_plan(svc, split_pdf, [0, 1]))
+
+    plan = _plan(svc, split_pdf, [], only_blocks=frozenset({(1, unit.tail_hash)}))
+    assert [u.unit_hash for u in _units(plan)] == [unit.unit_hash]
+    svc.execute(plan)
+
+    assert fake.calls[0][0].items[0].sentences == unit.merged_sentences
+    assert _rows(repos, 0)[unit.head_hash].unit_role == "head"
+    assert repos.page_status.get(report_book_id(repos), 1, "tr", "fake", "fake") is None

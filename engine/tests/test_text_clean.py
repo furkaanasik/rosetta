@@ -54,3 +54,19 @@ def test_superscript_becomes_footnote_marker() -> None:
 def test_code_text_keeps_indentation_and_reconstructs_offsets() -> None:
     lines = [(72.0, "SELECT *"), (72.0, "  FROM t"), (80.5, "WHERE x")]
     assert code_text(lines, left=72.0, char_width=4.25) == "SELECT *\n  FROM t\n  WHERE x"
+
+
+def test_join_across_dehyphenates_page_break() -> None:
+    from rosetta_engine.extract.text_clean import join_across
+
+    assert join_across("distrib-", "uted systems") == "distributed systems"
+    assert join_across("to be", "cloud native") == "to be cloud native"
+    assert join_across("", "cloud") == "cloud"
+    assert join_across("be ", "  ") == "be"
+
+
+def test_join_across_unicode_soft_hyphen_keeps_ascii_compounds() -> None:
+    from rosetta_engine.extract.text_clean import UNICODE_HYPHEN, join_across
+
+    assert join_across("analysis-", "friendly data", UNICODE_HYPHEN) == "analysis-friendly data"
+    assert join_across("distrib‐", "uted", UNICODE_HYPHEN) == "distributed"

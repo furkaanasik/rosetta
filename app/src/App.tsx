@@ -23,11 +23,12 @@ import {
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState, type ReactNode } from "react";
 import type { EngineApi } from "./api/engine";
 import { isExplanation } from "./api/engine";
-import { EngineError, type ExportMode, type Explanation, type UsageTotals, type ViewMode } from "./api/types";
+import { EngineError, type BlockRef, type ExportMode, type Explanation, type UsageTotals, type ViewMode } from "./api/types";
 import { CommandPalette, type PaletteAction } from "./components/CommandPalette";
 import { CostModal } from "./components/CostModal";
 import { ExplanationPanel } from "./components/ExplanationPanel";
 import { JobsPanel } from "./components/JobsPanel";
+import { ConsistencyPanel } from "./components/ConsistencyPanel";
 import { LearnPanel } from "./components/LearnPanel";
 import { LookupPopover, type LookupTarget } from "./components/LookupPopover";
 import { ProfileEditor } from "./components/ProfileEditor";
@@ -310,6 +311,22 @@ function Shell({ api, mock, engineError = null, loadDocument = loadPdf }: Props)
     },
     [api, bookId, confirmed, state.page, say, toast, onError, afterAi],
   );
+
+  // Targeted re-translation from the Tutarlılık panel: estimate → CostModal → only after Onayla.
+  const retranslateBlocks = (blocks: BlockRef[], term: string) => {
+    if (!api || bookId === null || blocks.length === 0) return;
+    void confirmed.request(
+      () => api.estimateTranslate(bookId, { pages: [], blocks }),
+      (t) => api.translate(bookId, t),
+      (r) => {
+        const failed = Object.keys(r.failed_pages).length;
+        if (failed) toast({ message: `${failed} sayfada yeniden çeviri başarısız: ${Object.values(r.failed_pages)[0] ?? ""}`, tone: "warning" });
+        else say(`“${term}” geçen ${blocks.length} paragraf yeniden çevrildi.`);
+        if (r.stop_kind) onError(new EngineError(r.stop_kind === "paused" ? "internal" : r.stop_kind, stopReasonText(r.stopped_reason ?? "")));
+        afterAi();
+      },
+    );
+  };
 
   const startJob = (pages: number[] | "all", budget: number | null) => {
     if (!api || bookId === null) return;
@@ -723,6 +740,17 @@ function Shell({ api, mock, engineError = null, loadDocument = loadPdf }: Props)
         }
         words={<LearnPanel api={api} bookId={bookId} refreshKey={state.revision} onChange={afterAi} />}
         profile={<ProfileEditor api={api} bookId={bookId} refreshKey={state.revision} onAnalyze={analyze} onMessage={say} />}
+        consistency={
+          <ConsistencyPanel
+            api={api}
+            bookId={bookId}
+            refreshKey={state.revision}
+            onGoto={(page) => dispatch({ type: "goto", page })}
+            onRetranslate={retranslateBlocks}
+            onChanged={afterAi}
+            onMessage={say}
+          />
+        }
       />
       {overlays}
     </div>

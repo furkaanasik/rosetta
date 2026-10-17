@@ -30,12 +30,33 @@ class ConfirmBody(_Body):
     confirm_token: str | None = None
 
 
+MAX_TARGET_BLOCKS = 200  # targeted re-translation: blocks per run
+
+
+class BlockRef(_Body):
+    page: int = Field(ge=1)  # 1-based
+    text_hash: str = Field(min_length=1, max_length=64)
+
+
 class TranslateEstimateBody(_Body):
     pages: list[int] = Field(default_factory=list)
     lang: str | None = None
     provider: str | None = None
     model: str | None = None
     force: bool = False
+    # Targeted re-translation of these blocks (pages is ignored); always replaces their rows.
+    blocks: list[BlockRef] | None = Field(default=None, max_length=MAX_TARGET_BLOCKS)
+
+
+class TermAcceptBody(_Body):
+    term: str
+    tr: str
+    lang: str | None = None
+
+
+class TermIgnoreBody(_Body):
+    term: str
+    lang: str | None = None
 
 
 class JobEstimateBody(TranslateEstimateBody):

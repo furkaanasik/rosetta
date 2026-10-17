@@ -48,6 +48,25 @@ class TranslationRow:
     sentences: list[str]
     sentence_aligned: bool
     prompt_version: int
+    unit_hash: str | None = None  # joined-unit rows (page-break paragraph); None = alone
+    unit_role: str | None = None  # "head" | "tail"
+
+
+@dataclass(frozen=True)
+class PairRow:
+    """A cached translation joined with its source block (term-consistency input)."""
+
+    page_no: int
+    block_ord: int
+    block_type: str
+    text_hash: str
+    en_text: str
+    en_sentences: list[str]
+    tr_text: str
+    tr_sentences: list[str]
+    sentence_aligned: bool
+    unit_hash: str | None
+    unit_role: str | None
 
 
 @dataclass(frozen=True)
@@ -327,6 +346,8 @@ def _translation(row: sqlite3.Row) -> Translation:
         sentences=json.loads(row["sentences_json"]),
         text=row["text"],
         sentence_aligned=bool(row["sentence_aligned"]),
+        unit_hash=row["unit_hash"],
+        unit_role=row["unit_role"],
     )
 
 
@@ -349,8 +370,8 @@ class TranslationRepo(_Repo):
         self, book_id: int, page_no: int, lang: str, provider: str, model: str
     ) -> dict[str, Translation]:
         rows = self._c.execute(
-            "SELECT page_no, text_hash, text, sentences_json, sentence_aligned "
-            "FROM translations WHERE book_id = ? AND page_no = ? AND lang = ? "
+            "SELECT page_no, text_hash, text, sentences_json, sentence_aligned, unit_hash, "
+            "unit_role FROM translations WHERE book_id = ? AND page_no = ? AND lang = ? "
             "AND provider = ? AND model = ?",
             (book_id, page_no, lang, provider, model),
         ).fetchall()
@@ -364,6 +385,36 @@ class TranslationRepo(_Repo):
             (book_id, lang, provider, model),
         ).fetchall()
         return [int(r["page_no"]) for r in rows]
+
+    def pairs_for_book(self, book_id: int, lang: str, provider: str, model: str) -> list[PairRow]:
+        """Every cached translation of the book with its source block, in reading order.
+
+        Repeated blocks (same text_hash twice on a page) yield one row per occurrence."""
+        rows = self._c.execute(
+            "SELECT t.page_no, t.text_hash, t.text, t.sentences_json, t.sentence_aligned, "
+            "t.unit_hash, t.unit_role, b.ord, b.type, b.text AS en_text, "
+            "b.sentences_json AS en_sentences FROM translations t JOIN blocks b "
+            "ON b.book_id = t.book_id AND b.page_no = t.page_no AND b.text_hash = t.text_hash "
+            "WHERE t.book_id = ? AND t.lang = ? AND t.provider = ? AND t.model = ? "
+            "ORDER BY t.page_no, b.ord",
+            (book_id, lang, provider, model),
+        ).fetchall()
+        return [
+            PairRow(
+                page_no=int(r["page_no"]),
+                block_ord=int(r["ord"]),
+                block_type=r["type"],
+                text_hash=r["text_hash"],
+                en_text=r["en_text"],
+                en_sentences=json.loads(r["en_sentences"]),
+                tr_text=r["text"],
+                tr_sentences=json.loads(r["sentences_json"]),
+                sentence_aligned=bool(r["sentence_aligned"]),
+                unit_hash=r["unit_hash"],
+                unit_role=r["unit_role"],
+            )
+            for r in rows
+        ]
 
     def put_rows(self, rows: Sequence[TranslationRow], *, overwrite: bool = False) -> None:
         """Cache translated blocks right away (paid work is never lost). No page status."""
@@ -386,14 +437,15 @@ class TranslationRepo(_Repo):
 
 _INSERT_TRANSLATION = (
     "INSERT INTO translations(book_id, page_no, text_hash, lang, provider, model, "
-    "text, sentences_json, sentence_aligned, prompt_version, created_at) "
-    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+    "text, sentences_json, sentence_aligned, prompt_version, created_at, unit_hash, unit_role) "
+    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
 )
 _ON_CONFLICT_REPLACE = (
     "ON CONFLICT(book_id, page_no, text_hash, lang, provider, model) DO UPDATE SET "
     "text = excluded.text, sentences_json = excluded.sentences_json, "
     "sentence_aligned = excluded.sentence_aligned, prompt_version = excluded.prompt_version, "
-    "created_at = excluded.created_at"
+    "created_at = excluded.created_at, unit_hash = excluded.unit_hash, "
+    "unit_role = excluded.unit_role"
 )
 
 
@@ -416,6 +468,8 @@ def _insert_translations(
                 int(r.sentence_aligned),
                 r.prompt_version,
                 now,
+                r.unit_hash,
+                r.unit_role,
             )
             for r in rows
         ],
@@ -532,6 +586,31 @@ class ProfileRepo(_Repo):
                 "ON CONFLICT(book_id) DO UPDATE SET json = excluded.json, "
                 "updated_at = excluded.updated_at",
                 (book_id, profile.model_dump_json(), self._now()),
+            )
+
+
+class TermIgnoreRepo(_Repo):
+    """Terms the user chose to ignore in the consistency report (per book + language)."""
+
+    def list(self, book_id: int, lang: str) -> set[str]:
+        rows = self._c.execute(
+            "SELECT term FROM term_ignores WHERE book_id = ? AND lang = ?", (book_id, lang)
+        ).fetchall()
+        return {str(r["term"]) for r in rows}
+
+    def add(self, book_id: int, lang: str, term: str) -> None:
+        with self._c:
+            self._c.execute(
+                "INSERT INTO term_ignores(book_id, lang, term, created_at) VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(book_id, lang, term) DO NOTHING",
+                (book_id, lang, term, self._now()),
+            )
+
+    def remove(self, book_id: int, lang: str, term: str) -> None:
+        with self._c:
+            self._c.execute(
+                "DELETE FROM term_ignores WHERE book_id = ? AND lang = ? AND term = ?",
+                (book_id, lang, term),
             )
 
 
@@ -699,6 +778,7 @@ class Repos:
     usage: UsageRepo
     profiles: ProfileRepo
     jobs: JobRepo
+    term_ignores: TermIgnoreRepo
     conn: sqlite3.Connection = field(repr=False, compare=False)
 
     @classmethod
@@ -711,5 +791,6 @@ class Repos:
             usage=UsageRepo(conn, clock),
             profiles=ProfileRepo(conn, clock),
             jobs=JobRepo(conn, clock),
+            term_ignores=TermIgnoreRepo(conn, clock),
             conn=conn,
         )

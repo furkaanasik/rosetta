@@ -131,13 +131,28 @@ def translate_estimate(book_id: int, body: TranslateEstimateBody, eng: Engine) -
     p = _provider(eng, body.provider, body.model)
     with eng.db() as s:
         ob = eng.book(s, book_id)
-        pages = eng.check_pages(ob, body.pages)
+        only: frozenset[tuple[int, str]] | None = None
+        if body.blocks is not None:
+            if not body.blocks:
+                raise bad_request("Blok listesi boş")
+            eng.check_pages(ob, [b.page for b in body.blocks])
+            only = frozenset((b.page - 1, b.text_hash) for b in body.blocks)
+            pages = sorted({p for p, _ in only})
+        else:
+            pages = eng.check_pages(ob, body.pages)
         svc, t = _service(eng, s, p)
         profile = _profile(s, book_id, t)
         lang = body.lang or eng.settings.default_lang
         with ob.lock:
             plan = svc.plan(
-                ob.book, ob.doc, ob.meta, pages, lang, profile=profile, force=body.force
+                ob.book,
+                ob.doc,
+                ob.meta,
+                pages,
+                lang,
+                profile=profile,
+                force=body.force,
+                only_blocks=only,
             )
     token = eng.confirm.issue("translate", f"book:{book_id}", _TranslatePayload(plan, p, profile))
     return _plan_estimate(eng, token, "translate", plan, p, t)

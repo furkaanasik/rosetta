@@ -5,6 +5,7 @@ import type {
   SettingsPatch,
   SettingsView,
   BookProfile,
+  ConsistencyReport,
   Estimate,
   EstimateHint,
   Explanation,
@@ -22,6 +23,7 @@ import type {
   PageInfo,
   Rating,
   ReviewCard,
+  TermAcceptResult,
   TermInfo,
   TocEntry,
   TranslateEstimateRequest,
@@ -84,6 +86,13 @@ export interface EngineApi {
   analyze(bookId: number, confirmToken: string): Promise<BookProfile>;
 
   exportPdf(bookId: number, req: ExportRequest): Promise<ExportResult>;
+
+  // --- term consistency (local analysis of the cached translations; never calls an AI) ---
+  consistency(bookId: number): Promise<ConsistencyReport>;
+  /** Adds term → tr to the book glossary; returns the paragraphs still using another rendering. */
+  acceptTerm(bookId: number, term: string, tr: string): Promise<TermAcceptResult>;
+  ignoreTerm(bookId: number, term: string): Promise<string[]>;
+  unignoreTerm(bookId: number, term: string): Promise<string[]>;
 
   lookup(query: string): Promise<LookupResult>;
   listVocab(query?: VocabQuery): Promise<VocabItem[]>;

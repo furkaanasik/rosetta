@@ -149,6 +149,63 @@ export interface TranslateEstimateRequest {
   provider?: string;
   model?: string;
   force?: boolean;
+  /** Targeted re-translation of these blocks (max 200; `pages` is ignored, rows are replaced). */
+  blocks?: BlockRef[];
+}
+
+/** A source block: 1-based page + the block's text hash. */
+export interface BlockRef {
+  page: number;
+  text_hash: string;
+}
+
+// --- term consistency (local analysis, no AI) ---
+
+export interface TermExample {
+  page: number;
+  /** `data-block` key of the paragraph ("<0-based page>-<order>"). */
+  block: string;
+  en: string;
+  tr: string;
+}
+
+export interface TermVariant {
+  key: string;
+  label: string;
+  count: number;
+  examples: TermExample[];
+}
+
+export interface AffectedBlock extends BlockRef {
+  block: string;
+}
+
+export interface TermIssue {
+  term: string;
+  /** glossary: a profile glossary term; mined: discovered in the book's text. */
+  source: "glossary" | "mined";
+  preferred: string | null;
+  occurrences: number;
+  variants: TermVariant[];
+  /** Paragraphs not using `preferred` (glossary terms only); at most 200 listed. */
+  affected: AffectedBlock[];
+  affected_count: number;
+}
+
+export interface ConsistencyReport {
+  lang: string;
+  provider: string;
+  model: string;
+  analyzed_blocks: number;
+  aligned_ratio: number;
+  ignored: string[];
+  issues: TermIssue[];
+}
+
+export interface TermAcceptResult {
+  profile: BookProfile;
+  affected: AffectedBlock[];
+  affected_count: number;
 }
 
 export type StopKind = "usage_limit" | "auth" | "budget" | "unavailable" | "paused" | null;

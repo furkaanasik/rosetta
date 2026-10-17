@@ -25,6 +25,9 @@ export function ProfileEditor({ api, bookId, refreshKey, onAnalyze, onMessage }:
   // Unsaved edits; a (re)load must never overwrite them for the same book.
   const dirty = useRef(false);
   const loadedBook = useRef<number | null>(null);
+  // Glossary as last loaded/saved: terms added elsewhere since (Tutarlılık → "Sözlüğe ekle")
+  // are merged in on save instead of being silently dropped by this full-profile PUT.
+  const baseline = useRef<Record<string, string>>({});
 
   useEffect(() => {
     if (!api || bookId === null) return;
@@ -35,6 +38,7 @@ export function ProfileEditor({ api, bookId, refreshKey, onAnalyze, onMessage }:
         const prof = p ?? EMPTY;
         loadedBook.current = bookId;
         dirty.current = false;
+        baseline.current = prof.sozluk;
         setProfile(prof);
         setRows(Object.entries(prof.sozluk));
         setLoaded(true);
@@ -65,9 +69,16 @@ export function ProfileEditor({ api, bookId, refreshKey, onAnalyze, onMessage }:
   const save = async () => {
     const sozluk = Object.fromEntries(rows.filter(([k, v]) => k.trim() && v.trim()).map(([k, v]) => [k.trim(), v.trim()]));
     try {
+      const server = await api.getProfile(bookId);
+      for (const [k, v] of Object.entries(server?.sozluk ?? {})) {
+        // Added on the server since this editor loaded, and not deleted/edited here.
+        if (!(k in baseline.current) && !(k in sozluk)) sozluk[k] = v;
+      }
       const saved = await api.putProfile(bookId, { ...profile, sozluk });
       dirty.current = false;
+      baseline.current = saved.sozluk;
       setProfile(saved);
+      setRows(Object.entries(saved.sozluk));
       onMessage("Profil kaydedildi. Mevcut çeviriler değişmez.");
     } catch (e) {
       onMessage(`Profil kaydedilemedi: ${e instanceof Error ? e.message : String(e)}`);

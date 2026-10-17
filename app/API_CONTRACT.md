@@ -112,10 +112,47 @@ renders the label as `<span class="h-label">CHAPTER 1</span>` followed by the ti
 ### Translation
 | Method | Path | Body | Response |
 |---|---|---|---|
-| POST | `/api/books/{id}/estimate` | `{pages:number[], lang?, provider?, model?, force?}` | `Estimate` (`operation:"translate"`) |
+| POST | `/api/books/{id}/estimate` | `{pages:number[], lang?, provider?, model?, force?, blocks?: {page, text_hash}[]}` | `Estimate` (`operation:"translate"`) |
 | POST | `/api/books/{id}/translate` | `{confirm_token}` | `TranslationReport {done_pages, failed_pages:{page:reason}, stopped_reason, stop_kind: "usage_limit"\|"auth"\|"budget"\|"unavailable"\|"paused"\|null, usage}` |
 
 A fully cached request returns `calls: 0`; the app still shows the modal, and running it costs nothing.
+
+**Paragraphs split by a page break** (page N ends mid-sentence, page N+1's first body paragraph
+continues in lower case) are translated as **one item**. The neighbour page's half is pulled into
+the plan even when that page was not requested (its rows are written, its page status is not).
+`total_blocks`/`cached_blocks` count such a unit once. The translation is split back by sentence:
+the sentence crossing the break stays on page N, page N+1 starts with the next sentence (its row
+may be empty). Rendered HTML marks the halves with `cont-next` (page N) / `cont-prev` (page N+1)
+and an empty tail with `cont-prev joined-empty` (hidden on TR pages; the review page shows
+"↑ önceki sayfada"). Pairs translated separately before this feature stay cached as they are.
+
+**Targeted re-translation** (`blocks`, at most 200; `pages` is ignored): only these blocks are
+planned (a block that is half of a joined unit brings the whole unit) and their cached rows are
+always replaced. Running such a plan **never writes page status**: a partly translated page does
+not become "done", a failed page stays failed. `done_pages` in the report lists the touched pages.
+Used by the consistency panel; it goes through the same estimate → CostModal → `/translate` flow.
+
+### Term consistency (no AI)
+Local statistics over the cached translations of the default provider/model; nothing here calls
+a provider, writes `usage` or touches the translation cache.
+
+| Method | Path | Body / query | Response |
+|---|---|---|---|
+| GET | `/api/books/{id}/consistency` | `?lang=` | `ConsistencyReport` |
+| POST | `/api/books/{id}/consistency/accept` | `{term, tr, lang?}` | `{profile: BookProfile, affected: AffectedBlock[], affected_count}` — adds `term → tr` to the glossary (case-insensitive replace; removed from `cevrilmeyecek` and from the ignore list) |
+| POST | `/api/books/{id}/consistency/ignore` | `{term, lang?}` | `{ignored: string[]}` |
+| DELETE | `/api/books/{id}/consistency/ignore` | `?term=&lang=` | `{ignored: string[]}` |
+
+```ts
+ConsistencyReport { lang, provider, model, analyzed_blocks, aligned_ratio, ignored: string[],
+                    issues: TermIssue[] }
+TermIssue { term, source: "glossary"|"mined", preferred: string|null, occurrences,
+            variants: {key, label, count, examples: {page, block, en, tr}[] /* ≤3 */}[],
+            affected: AffectedBlock[] /* ≤200 */, affected_count }
+AffectedBlock { page, block /* data-block key "<0-based page>-<order>" */, text_hash }
+```
+`affected` is only filled for glossary terms (paragraphs not using `preferred`); pass it as
+`blocks` to `/estimate` to re-translate them. `term`/`tr` are 1–200 characters (400 otherwise).
 
 ### Batch jobs
 | Method | Path | Body / query | Response |

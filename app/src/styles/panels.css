@@ -345,3 +345,109 @@
   border-radius: 999px;
   font-size: var(--text-xs);
 }
+
+/* ---- Consistency (term consistency of the existing translations) ---- */
+.consistency__intro {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--s2);
+}
+.consistency__summary {
+  color: var(--ink-2);
+  margin: 0;
+}
+.consistency__list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+}
+.consistency__ignored {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.term-issue {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  padding: var(--s3) var(--s4);
+  border-radius: var(--r-pop);
+  background: var(--raised);
+  border: 1px solid var(--line);
+}
+.term-issue__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s2);
+}
+.term-issue__term {
+  font-weight: 600;
+  font-size: var(--text-sm);
+}
+.term-issue__sub {
+  font-size: var(--text-xs);
+  color: var(--ink-2);
+}
+.term-issue__variants {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.term-variant__row {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  font-size: var(--text-sm);
+}
+.term-variant__label {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.term-variant__examples {
+  font-size: var(--text-xs);
+  color: var(--ink-2);
+}
+.term-variant__examples summary {
+  cursor: pointer;
+  color: var(--ink-3);
+}
+.term-variant__examples ul {
+  margin: 6px 0 0;
+  padding-left: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.term-variant__examples li {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  column-gap: var(--s2);
+}
+.term-example__page {
+  grid-row: span 2;
+  align-self: start;
+  border: none;
+  background: none;
+  padding: 0;
+  color: var(--accent);
+  cursor: pointer;
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+}
+.term-example__en {
+  color: var(--ink-3);
+}
+.term-issue__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}

@@ -39,6 +39,7 @@ from rosetta_engine.models import (
     Book,
     BookProfile,
     CostEstimate,
+    JoinedUnit,
     PageBlocks,
     Translation,
     TranslationPlan,
@@ -66,6 +67,7 @@ from rosetta_engine.translate.estimator import (
     estimate_request,
     usd,
 )
+from rosetta_engine.translate.joins import find_link, merged_block, split_translation
 from rosetta_engine.translate.prompt import PROMPT_VERSION
 
 log = logging.getLogger(__name__)
@@ -77,6 +79,8 @@ MAX_CONSECUTIVE_ERRORS = 3
 Progress = Callable[[int, int], None]
 StopKind = Literal["usage_limit", "auth", "budget", "unavailable", "paused"]
 BatchCallback = Callable[[TranslationReport], None]
+BlockRef = tuple[int, str]  # (0-based page, source text_hash)
+Joins = dict[str, JoinedUnit]  # merged text_hash -> unit
 
 
 @dataclass
@@ -107,6 +111,22 @@ def _stop_kind(e: ProviderError) -> StopKind:
 
 def _needs_translation(block: Block) -> bool:
     return block.translatable and bool(block.text.strip())
+
+
+def _unit_of(block: Block, joins: Joins) -> JoinedUnit | None:
+    """The joined unit ``block`` stands for (a merged block), else None."""
+    unit = joins.get(block.text_hash)
+    if unit is None or block.page_no != unit.head_page or block.order != unit.head_order:
+        return None
+    return unit
+
+
+def _parts(block: Block, joins: Joins) -> list[BlockRef]:
+    """Source rows a planned block writes: both halves of a joined unit, else the block."""
+    unit = _unit_of(block, joins)
+    if unit is None:
+        return [(block.page_no, block.text_hash)]
+    return [(unit.head_page, unit.head_hash), (unit.tail_page, unit.tail_hash)]
 
 
 class PageTranslationService:
@@ -192,11 +212,110 @@ class PageTranslationService:
     def _key(self, block: Block, lang: str) -> CacheKey:
         return CacheKey(block.page_no, block.text_hash, lang, self._t.name, self._t.model)
 
-    def _uncached(self, book: Book, blocks: Sequence[Block], lang: str, force: bool) -> list[Block]:
+    def _part_key(self, ref: BlockRef, lang: str) -> CacheKey:
+        return CacheKey(ref[0], ref[1], lang, self._t.name, self._t.model)
+
+    def _uncached(
+        self,
+        book: Book,
+        blocks: Sequence[Block],
+        lang: str,
+        force: bool,
+        joins: Joins | None = None,
+    ) -> list[Block]:
+        """Blocks without a cached translation. A joined unit is cached when both of its rows
+        exist and were written by that unit, or both were translated alone earlier (legacy
+        pair, never re-translated automatically). One half only → the unit is re-translated."""
         if force:
             return list(blocks)
-        cached = self._r.translations.get_many(book.id, [self._key(b, lang) for b in blocks])
-        return [b for b in blocks if self._key(b, lang) not in cached]
+        joins = joins or {}
+        keys = [self._part_key(ref, lang) for b in blocks for ref in _parts(b, joins)]
+        cached = self._r.translations.get_many(book.id, keys)
+        out: list[Block] = []
+        for b in blocks:
+            unit = _unit_of(b, joins)
+            if unit is None:
+                if self._key(b, lang) not in cached:
+                    out.append(b)
+                continue
+            head, tail = (cached.get(self._part_key(r, lang)) for r in _parts(b, joins))
+            ok = (
+                head is not None
+                and tail is not None
+                and (
+                    head.unit_hash == tail.unit_hash == unit.unit_hash
+                    or (head.unit_hash is None and tail.unit_hash is None)
+                )
+            )
+            if not ok:
+                out.append(b)
+        return out
+
+    def _links(
+        self,
+        book: Book,
+        doc: pymupdf.Document,
+        meta: BookMeta,
+        extracted: dict[int, PageBlocks],
+        pages: Sequence[int],
+    ) -> list[JoinedUnit]:
+        """Paragraphs split by a page break that touch ``pages``. Neighbour pages are only
+        extracted (no AI) and not added to ``extracted``."""
+        loaded: dict[int, PageBlocks] = {}
+
+        def get(p: int) -> PageBlocks:
+            if p in extracted:
+                return extracted[p]
+            if p not in loaded:
+                loaded[p] = self._load_page(book, doc, meta, p)
+            return loaded[p]
+
+        pairs = sorted(
+            {(p - 1, p) for p in pages if p > 0}
+            | {(p, p + 1) for p in pages if p + 1 < book.page_count}
+        )
+        units: list[JoinedUnit] = []
+        for n, n1 in pairs:
+            before = get(n - 1) if n > 0 else None
+            unit = find_link(before, get(n), get(n1), meta.soft_hyphen)
+            if unit is not None:
+                units.append(unit)
+            elif before is not None and find_link(None, get(n), get(n1), meta.soft_hyphen):
+                log.info("not chaining page-break paragraph %d→%d (head is a tail)", n + 1, n1 + 1)
+        return units
+
+    def _apply_links(
+        self,
+        book: Book,
+        doc: pymupdf.Document,
+        meta: BookMeta,
+        extracted: dict[int, PageBlocks],
+        translatable: dict[int, list[Block]],
+        units: Sequence[JoinedUnit],
+    ) -> Joins:
+        """Replace each unit's halves in ``translatable`` by one merged block: in the head's
+        place, or first on the tail page when the head page is out of scope."""
+        joins: Joins = {}
+        for unit in units:
+            head_page = extracted.get(unit.head_page) or self._load_page(
+                book, doc, meta, unit.head_page
+            )
+            head = next(b for b in head_page.blocks if b.order == unit.head_order)
+            merged = merged_block(unit, head)
+            tail_bucket = translatable.get(unit.tail_page)
+            if tail_bucket is not None:
+                translatable[unit.tail_page] = [
+                    b for b in tail_bucket if b.order != unit.tail_order
+                ]
+            head_bucket = translatable.get(unit.head_page)
+            if head_bucket is not None:
+                translatable[unit.head_page] = [
+                    merged if b.order == unit.head_order else b for b in head_bucket
+                ]
+            else:
+                translatable[unit.tail_page].insert(0, merged)
+            joins[merged.text_hash] = unit
+        return joins
 
     def plan(
         self,
@@ -208,20 +327,40 @@ class PageTranslationService:
         *,
         profile: BookProfile | None = None,
         force: bool = False,
+        only_blocks: frozenset[BlockRef] | None = None,
     ) -> TranslationPlan:
-        """Find untranslated blocks, batch them and estimate cost. Never calls the provider."""
+        """Find untranslated blocks, batch them and estimate cost. Never calls the provider.
+
+        A paragraph split by a page break becomes one item (its neighbour-page half is pulled
+        in; the neighbour page itself is not added to the plan). ``only_blocks`` = targeted
+        re-translation of these (page, text_hash) blocks: they are planned even if cached and
+        executing the plan never writes a page status."""
         profile = profile or BookProfile()
+        targeted = only_blocks is not None
+        if only_blocks is not None:
+            pages = sorted({p for p, _ in only_blocks})
         pages = sorted(set(pages))
         extracted = self.ensure_pages(book, doc, meta, pages)
         no_text = [p for p in pages if not extracted[p].has_text_layer]
         if no_text:
             log.warning("skipping pages without a text layer: %s", [p + 1 for p in no_text])
         translatable = {p: [b for b in extracted[p].blocks if _needs_translation(b)] for p in pages}
-        total = sum(len(v) for v in translatable.values())
-        todo = {p: self._uncached(book, translatable[p], lang, force) for p in pages}
+        units = self._links(book, doc, meta, extracted, pages)
+        joins = self._apply_links(book, doc, meta, extracted, translatable, units)
+        if only_blocks is not None:
+            translatable = {
+                p: [b for b in blocks if any(r in only_blocks for r in _parts(b, joins))]
+                for p, blocks in translatable.items()
+            }
+        planned = [b for blocks in translatable.values() for b in blocks]
+        joins = {k: u for k, u in joins.items() if any(_unit_of(b, {k: u}) for b in planned)}
+        total = len(planned)
+        todo = {
+            p: self._uncached(book, translatable[p], lang, force or targeted, joins) for p in pages
+        }
         cached = total - sum(len(v) for v in todo.values())
 
-        batches = self._batch(book, doc, meta, extracted, todo, lang, profile)
+        batches = self._batch(book, doc, meta, extracted, todo, lang, profile, joins)
         f = calibration_factors(self._r.usage.recent_ok(self._t.name, self._t.model))
         price = self._s.price_for(self._t.model)
         if price is None:
@@ -250,6 +389,8 @@ class PageTranslationService:
             batches=batches,
             estimate=estimate,
             no_text_pages=no_text,
+            targeted=targeted,
+            joined_units=len(joins),
         )
 
     def _batch(
@@ -261,8 +402,10 @@ class PageTranslationService:
         todo: dict[int, list[Block]],
         lang: str,
         profile: BookProfile,
+        joins: Joins | None = None,
     ) -> list[Batch]:
         """Greedy: <= batch_max_pages pages and <= batch_max_input_tokens estimated input."""
+        joins = joins or {}
         max_pages = self._s.batch_max_pages
         max_tokens = self._s.batch_max_input_tokens
         batches: list[Batch] = []
@@ -271,7 +414,7 @@ class PageTranslationService:
 
         def close() -> None:
             if current:
-                batches.append(self._make_batch(list(current), context, lang, profile))
+                batches.append(self._make_batch(list(current), context, lang, profile, joins))
                 current.clear()
 
         for p in sorted(todo):
@@ -299,7 +442,7 @@ class PageTranslationService:
     ) -> list[str]:
         """Last paragraphs before ``first``: same page if the batch starts mid-page,
         otherwise the preceding page."""
-        page = extracted[first.page_no]
+        page = extracted.get(first.page_no) or self._load_page(book, doc, meta, first.page_no)
         before = [b for b in page.blocks if b.order < first.order and b.translatable]
         if not before:
             prev_no = first.page_no - 1
@@ -324,15 +467,23 @@ class PageTranslationService:
         return TranslationRequest(lang=lang, items=items, profile=profile, context=context)
 
     def _make_batch(
-        self, blocks: list[Block], context: list[str], lang: str, profile: BookProfile
+        self,
+        blocks: list[Block],
+        context: list[str],
+        lang: str,
+        profile: BookProfile,
+        joins: Joins | None = None,
     ) -> Batch:
         est_in, est_out = estimate_request(self._request(blocks, context, lang, profile))
+        joins = joins or {}
+        mine = {b.text_hash: u for b in blocks if (u := _unit_of(b, joins)) is not None}
         return Batch(
             pages=sorted({b.page_no for b in blocks}),
             blocks=blocks,
             context=context,
             est_input_tokens=est_in,
             est_output_tokens=est_out,
+            joins=mine,
         )
 
     # --- execute (AI; only after approval) -----------------------------------------------
@@ -367,12 +518,17 @@ class PageTranslationService:
                 )
 
         # Re-check the cache: another run may have filled it since planning (not with
-        # --force, where cache hits are expected and replaced).
-        batches = [self._uncached(book, batch.blocks, lang, force) for batch in plan.batches]
+        # --force, where cache hits are expected and replaced; a targeted plan acts like it).
+        replace = force or plan.targeted
+        batches = [
+            self._uncached(book, batch.blocks, lang, replace, batch.joins) for batch in plan.batches
+        ]
         needed: dict[int, set[str]] = {p: set() for p in plan.pages}
-        for blocks in batches:
+        for batch, blocks in zip(plan.batches, batches, strict=True):
             for b in blocks:
-                needed[b.page_no].add(b.text_hash)
+                for p, h in _parts(b, batch.joins):
+                    if p in needed:
+                        needed[p].add(h)
 
         translated: dict[int, set[str]] = {p: set() for p in plan.pages}
         done: list[int] = []
@@ -382,13 +538,20 @@ class PageTranslationService:
         stop_kind: StopKind | None = None
         consecutive_errors = 0
 
-        for p in plan.no_text_pages:
-            failed[p] = NO_TEXT_REASON
-            self._fail_page(book, p, lang, NO_TEXT_REASON)
-        for p in plan.pages:
-            if not needed[p] and p not in failed:
-                self._save_page(book, p, lang, [], overwrite=force)
-                done.append(p)
+        if not plan.targeted:
+            # A targeted plan never writes page status: a partly translated page must not
+            # become "done" (nor a done page "failed") because a few blocks were redone.
+            for p in plan.no_text_pages:
+                failed[p] = NO_TEXT_REASON
+                self._fail_page(book, p, lang, NO_TEXT_REASON)
+            for p in plan.pages:
+                if not needed[p] and p not in failed:
+                    self._save_page(book, p, lang, [], overwrite=force)
+                    done.append(p)
+
+        def plan_pages(blocks: Sequence[Block], joins: Joins) -> list[int]:
+            pages = {p for b in blocks for p, _ in _parts(b, joins)}
+            return sorted(p for p in pages if p in needed)
 
         def snapshot() -> TranslationReport:
             return TranslationReport(
@@ -402,7 +565,9 @@ class PageTranslationService:
         price = self._s.price_for(self._t.model)
         total_batches = len(batches)
         for n, (batch, blocks) in enumerate(zip(plan.batches, batches, strict=True), start=1):
-            blocks = [b for b in blocks if b.page_no not in failed]
+            blocks = [
+                b for b in blocks if not any(p in failed for p in plan_pages([b], batch.joins))
+            ]
             if blocks and should_stop is not None and should_stop():
                 stopped, stop_kind = "pause requested", "paused"
                 log.info("translation paused before batch %d/%d", n, total_batches)
@@ -429,15 +594,17 @@ class PageTranslationService:
                     log.warning("translation stopped: %s", stopped)
                     break
                 stopped = None
-            if blocks and not force:
+            if blocks and not replace:
                 # Re-check right before paying: a concurrent run may have cached these blocks.
-                fresh = self._uncached(book, blocks, lang, False)
+                fresh = self._uncached(book, blocks, lang, False, batch.joins)
                 if len(fresh) < len(blocks):
-                    keep = {(b.page_no, b.text_hash) for b in fresh}
+                    keep = {(b.page_no, b.order) for b in fresh}
                     for b in blocks:
-                        if (b.page_no, b.text_hash) not in keep:
-                            translated[b.page_no].add(b.text_hash)
-                    for p in sorted({b.page_no for b in blocks}):
+                        if (b.page_no, b.order) not in keep:
+                            for p, h in _parts(b, batch.joins):
+                                if p in translated:
+                                    translated[p].add(h)
+                    for p in plan_pages(blocks, batch.joins):
                         if p not in done and needed[p] <= translated[p]:
                             self._save_page(book, p, lang, [])
                             done.append(p)
@@ -457,9 +624,10 @@ class PageTranslationService:
                     log.warning("translation stopped (%s): %s", stop_kind, e)
                     break
                 except ProviderError as e:
-                    for p in sorted({b.page_no for b in blocks}):
+                    for p in plan_pages(blocks, batch.joins):
                         failed[p] = str(e)
-                        self._fail_page(book, p, lang, str(e))
+                        if not plan.targeted:
+                            self._fail_page(book, p, lang, str(e))
                     consecutive_errors += 1
                     if consecutive_errors >= MAX_CONSECUTIVE_ERRORS:
                         stopped = f"{consecutive_errors} consecutive provider errors; last: {e}"
@@ -468,7 +636,18 @@ class PageTranslationService:
                         break
                 else:
                     consecutive_errors = 0
-                    self._store_batch(book, lang, blocks, result, needed, translated, done, force)
+                    self._store_batch(
+                        book,
+                        lang,
+                        blocks,
+                        result,
+                        needed,
+                        translated,
+                        done,
+                        force,
+                        joins=batch.joins,
+                        targeted=plan.targeted,
+                    )
             if on_progress is not None:
                 on_progress(n, total_batches)
             if on_batch is not None:
@@ -488,31 +667,74 @@ class PageTranslationService:
         translated: dict[int, set[str]],
         done: list[int],
         force: bool,
+        *,
+        joins: Joins | None = None,
+        targeted: bool = False,
     ) -> None:
-        """Cache a batch's rows now; pages it completes are saved with status 'done'."""
+        """Cache a batch's rows now; pages it completes are saved with status 'done'.
+
+        A joined unit is split back into a head row and a tail row, written with overwrite
+        (it replaces halves translated alone) and without status for out-of-plan pages. A
+        targeted batch only replaces rows; the touched pages are reported, never saved."""
+        joins = joins or {}
         by_page: dict[int, list[TranslationRow]] = {}
+        unit_rows: list[TranslationRow] = []
+
+        def row(
+            page_no: int,
+            h: str,
+            sentences: list[str],
+            aligned: bool,
+            unit: JoinedUnit | None = None,
+            role: str | None = None,
+        ) -> TranslationRow:
+            return TranslationRow(
+                book_id=book.id,
+                page_no=page_no,
+                text_hash=h,
+                lang=lang,
+                provider=self._t.name,
+                model=self._t.model,
+                text=" ".join(sentences),
+                sentences=sentences,
+                sentence_aligned=aligned,
+                prompt_version=PROMPT_VERSION,
+                unit_hash=unit.unit_hash if unit else None,
+                unit_role=role,
+            )
+
+        touched: set[int] = set()
         for i, b in enumerate(blocks, start=1):
             item = result.items[i]
-            by_page.setdefault(b.page_no, []).append(
-                TranslationRow(
-                    book_id=book.id,
-                    page_no=b.page_no,
-                    text_hash=b.text_hash,
-                    lang=lang,
-                    provider=self._t.name,
-                    model=self._t.model,
-                    text=" ".join(item.sentences),
-                    sentences=list(item.sentences),
-                    sentence_aligned=item.aligned,
-                    prompt_version=PROMPT_VERSION,
+            unit = _unit_of(b, joins)
+            if unit is None:
+                by_page.setdefault(b.page_no, []).append(
+                    row(b.page_no, b.text_hash, list(item.sentences), item.aligned)
                 )
+                touched.add(b.page_no)
+                continue
+            head_s, tail_s, ok = split_translation(unit, list(item.sentences), item.aligned)
+            unit_rows.append(row(unit.head_page, unit.head_hash, head_s, ok, unit, "head"))
+            unit_rows.append(row(unit.tail_page, unit.tail_hash, tail_s, ok, unit, "tail"))
+            for p, h in _parts(b, joins):
+                if p in translated:
+                    translated[p].add(h)
+                    touched.add(p)
+        if unit_rows:
+            self._r.translations.put_rows(unit_rows, overwrite=True)
+        if targeted:
+            self._r.translations.put_rows(
+                [r for rows in by_page.values() for r in rows], overwrite=True
             )
-        for p, rows in sorted(by_page.items()):
+            done.extend(p for p in sorted(touched) if p not in done)
+            return
+        for p in sorted(touched):
+            rows = by_page.get(p, [])
             translated[p].update(r.text_hash for r in rows)
             if p not in done and needed[p] <= translated[p]:
                 self._save_page(book, p, lang, rows, overwrite=force)
                 done.append(p)
-            else:
+            elif rows:
                 self._r.translations.put_rows(rows, overwrite=force)
 
     def _call(self, book: Book, request: TranslationRequest, tally: _Tally) -> ProviderResult:

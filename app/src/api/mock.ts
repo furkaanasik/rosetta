@@ -4,7 +4,9 @@ import {
   type BlockInfo,
   type BookInfo,
   type BookProfile,
+  type AffectedBlock,
   type ClaudeCandidate,
+  type ConsistencyReport,
   type Diagnostics,
   type EditableSettings,
   type SettingsPatch,
@@ -26,7 +28,9 @@ import {
   type PageInfo,
   type Rating,
   type ReviewCard,
+  type TermAcceptResult,
   type TermInfo,
+  type TermIssue,
   type TocEntry,
   type TranslateEstimateRequest,
   type TranslationReport,
@@ -317,6 +321,23 @@ export class MockEngineApi implements EngineApi {
 
   estimateTranslate(bookId: number, req: TranslateEstimateRequest) {
     this.requireBook(bookId);
+    if (req.blocks) {
+      // Targeted re-translation: always replaces, page status untouched.
+      const blocks = req.blocks;
+      const pages = [...new Set(blocks.map((b) => b.page))].sort((a, b) => a - b);
+      const est = this.issue("translate", pages, async () => {
+        this.charge(pages.length);
+        const report: TranslationReport = {
+          done_pages: pages,
+          failed_pages: {},
+          stopped_reason: null,
+          stop_kind: null,
+          usage: this.spent,
+        };
+        return report;
+      }, blocks.length);
+      return this.delay(est);
+    }
     const pages = req.force ? req.pages : req.pages.filter((p) => !this.translated.has(p));
     const est = this.issue("translate", req.pages, async () => {
       if (pages.length) this.charge(pages.length);
@@ -426,6 +447,77 @@ export class MockEngineApi implements EngineApi {
   getProfile(bookId: number) {
     this.requireBook(bookId);
     return this.delay(this.profile);
+  }
+
+  // --- term consistency (mock: two deterministic findings; never "calls an AI") ---
+  private ignoredTerms = new Set<string>();
+
+  private consistencyIssues(): TermIssue[] {
+    const glossary = this.profile?.sozluk ?? {};
+    const ex = (page: number, en: string, tr: string) => ({ page, block: `${page - 1}-2`, en, tr });
+    const block = (page: number): AffectedBlock => ({ page, block: `${page - 1}-2`, text_hash: `mock-${page}` });
+    const replication: TermIssue = {
+      term: "replication",
+      source: "mined",
+      preferred: null,
+      occurrences: 8,
+      variants: [
+        { key: "çoğal", label: "çoğaltma", count: 5, examples: [ex(1, "Replication keeps copies.", "Çoğaltma kopyaları tutar.")] },
+        { key: "repli", label: "replikasyon", count: 3, examples: [ex(4, "Async replication loses writes.", "Asenkron replikasyon yazmaları kaybeder.")] },
+      ],
+      affected: [],
+      affected_count: 0,
+    };
+    const accepted = glossary.replication;
+    if (accepted) {
+      const affected = accepted.startsWith("çoğalt") ? [block(4), block(5), block(6)] : [block(1), block(2), block(3)];
+      Object.assign(replication, { source: "glossary", preferred: accepted, affected, affected_count: affected.length });
+    }
+    const leader: TermIssue = {
+      term: "leader",
+      source: "glossary",
+      preferred: glossary.leader ?? "lider",
+      occurrences: 6,
+      variants: [
+        { key: "lider", label: "lider", count: 4, examples: [ex(2, "The leader accepts writes.", "Lider yazmaları kabul eder.")] },
+        { key: "önder", label: "önder", count: 2, examples: [ex(3, "Followers copy the leader.", "Takipçiler önderi kopyalar.")] },
+      ],
+      affected: [block(3), block(7)],
+      affected_count: 2,
+    };
+    return [leader, replication].filter((i) => !this.ignoredTerms.has(i.term));
+  }
+
+  consistency(bookId: number): Promise<ConsistencyReport> {
+    this.requireBook(bookId);
+    return this.delay({
+      lang: "tr",
+      provider: "claude-cli",
+      model: "sonnet",
+      analyzed_blocks: this.translated.size * 3 + 12,
+      aligned_ratio: 1,
+      ignored: [...this.ignoredTerms].sort(),
+      issues: this.consistencyIssues(),
+    });
+  }
+  acceptTerm(bookId: number, term: string, tr: string): Promise<TermAcceptResult> {
+    this.requireBook(bookId);
+    const base: BookProfile = this.profile ?? { tur: "", ton: "", hedef_dil: "tr", cevrilmeyecek: [], sozluk: {}, kod_dili: [] };
+    this.profile = { ...base, sozluk: { ...base.sozluk, [term]: tr } };
+    this.ignoredTerms.delete(term);
+    const issue = this.consistencyIssues().find((i) => i.term === term);
+    const affected = issue?.affected ?? [];
+    return this.delay({ profile: this.profile, affected, affected_count: affected.length });
+  }
+  ignoreTerm(bookId: number, term: string) {
+    this.requireBook(bookId);
+    this.ignoredTerms.add(term);
+    return this.delay([...this.ignoredTerms].sort());
+  }
+  unignoreTerm(bookId: number, term: string) {
+    this.requireBook(bookId);
+    this.ignoredTerms.delete(term);
+    return this.delay([...this.ignoredTerms].sort());
   }
   putProfile(bookId: number, profile: BookProfile) {
     this.requireBook(bookId);

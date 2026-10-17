@@ -117,6 +117,29 @@ class Translation(BaseModel):
     sentences: list[str]
     text: str
     sentence_aligned: bool
+    unit_hash: str | None = None  # set on rows of a paragraph joined across a page break
+    unit_role: Literal["head", "tail"] | None = None
+
+
+class JoinedUnit(BaseModel):
+    """A paragraph split by a page break, translated as one item.
+
+    The head is the last body paragraph of ``head_page``, the tail the first body block of
+    ``tail_page`` (= head_page + 1). ``head_count`` translated sentences go to the head row
+    (the sentence that crosses the break included); the rest go to the tail row."""
+
+    model_config = ConfigDict(frozen=True)
+
+    unit_hash: str  # text_hash of the merged text
+    head_page: int
+    head_hash: str
+    head_order: int
+    tail_page: int
+    tail_hash: str
+    tail_order: int
+    head_count: int
+    merged_text: str
+    merged_sentences: list[str]
 
 
 class Batch(BaseModel):
@@ -129,6 +152,7 @@ class Batch(BaseModel):
     context: list[str] = Field(default_factory=list)  # preceding paragraphs, not translated
     est_input_tokens: int = 0
     est_output_tokens: int = 0
+    joins: dict[str, JoinedUnit] = Field(default_factory=dict)  # merged text_hash -> unit
 
 
 class TranslationPlan(BaseModel):
@@ -145,6 +169,8 @@ class TranslationPlan(BaseModel):
     batches: list[Batch] = Field(default_factory=list)
     estimate: CostEstimate = Field(default_factory=CostEstimate)
     no_text_pages: list[int] = Field(default_factory=list)  # scanned pages, skipped
+    targeted: bool = False  # only_blocks plan: rows are replaced, page status is never written
+    joined_units: int = 0  # paragraphs joined across a page break (counted once)
 
 
 class UsageTotals(BaseModel):

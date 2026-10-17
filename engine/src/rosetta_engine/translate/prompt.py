@@ -65,8 +65,9 @@ def _batch_text(request: TranslationRequest) -> str:
     return "\n".join(s for item in request.items for s in item.sentences).lower()
 
 
-def _mentions(term: str, batch_text: str) -> bool:
-    """Whole-word/phrase, case-insensitive: "set" does not match "dataset"."""
+def mentions(term: str, batch_text: str) -> bool:
+    """Whole-word/phrase match of ``term`` in already lower-cased ``batch_text``
+    ("set" does not match "dataset")."""
     return re.search(rf"(?<!\w){re.escape(term.lower())}(?!\w)", batch_text) is not None
 
 
@@ -78,10 +79,10 @@ def _profile_section(profile: BookProfile, batch_text: str) -> dict[str, Any]:
         out["tone"] = profile.tone
     if profile.code_languages:
         out["code_languages"] = profile.code_languages
-    dnt = [t for t in profile.do_not_translate if t and _mentions(t, batch_text)]
+    dnt = [t for t in profile.do_not_translate if t and mentions(t, batch_text)]
     if dnt:
         out["DO_NOT_TRANSLATE"] = dnt
-    glossary = {k: v for k, v in profile.glossary.items() if k and _mentions(k, batch_text)}
+    glossary = {k: v for k, v in profile.glossary.items() if k and mentions(k, batch_text)}
     if glossary:
         out["GLOSSARY"] = glossary
     return out

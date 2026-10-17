@@ -52,7 +52,7 @@ CODE_MERGE_GAP = 16.0  # consecutive code blocks closer than this are one listin
 DROP_CAP_RATIO = 2.0
 CALLOUT_TOL = 2.0  # pt; a code callout belongs to a code unit whose y-range (± this) holds it
 LIST_MARKER_GAP = 15.0  # pt between a vector list marker's right edge and the item text
-_SENTENCE_END = re.compile(r"[.:!?][\"”’)\]]*$")
+SENTENCE_END = re.compile(r"[.:!?][\"”’)\]]*$")
 
 
 class TocEntry(BaseModel):
@@ -406,4 +406,4 @@ def _continues(ordered: Sequence[Block]) -> bool:
     if not ordered:
         return False
     last = ordered[-1]
-    return last.type == BlockType.PARAGRAPH and not _SENTENCE_END.search(last.text.strip())
+    return last.type == BlockType.PARAGRAPH and not SENTENCE_END.search(last.text.strip())

@@ -62,6 +62,17 @@ def _joiner(prev: str, nxt: str, soft: str = ASCII_HYPHEN) -> tuple[str, str]:
     return prev, " "
 
 
+def join_across(prev: str, nxt: str, soft: str = ASCII_HYPHEN) -> str:
+    """Join two text runs split across a page break, with the same de-hyphenation rule as
+    ``join_lines`` ("distrib-" + "uted" → "distributed"; "be" + "cloud" → "be cloud")."""
+    if not prev.strip():
+        return clean_text(nxt)
+    if not nxt.strip():
+        return clean_text(prev)
+    adj, sep = _joiner(prev, nxt, soft)
+    return clean_text(adj + sep + nxt.strip())
+
+
 def join_lines(lines: Sequence[str], soft: str = ASCII_HYPHEN) -> str:
     out = ""
     for line in lines:

@@ -19,3 +19,23 @@ describe("MockEngineApi confirm tokens", () => {
     expect(again.calls).toBe(0);
   });
 });
+
+describe("MockEngineApi term consistency", () => {
+  it("accepting a term edits the glossary without AI; targeted re-translation needs a token", async () => {
+    const api = new MockEngineApi();
+    const book = await api.openBook("/x/kitap.pdf");
+    const report = await api.consistency(book.id);
+    expect(report.issues.map((i) => i.term)).toEqual(["leader", "replication"]);
+
+    const res = await api.acceptTerm(book.id, "replication", "çoğaltma");
+    expect(res.profile.sozluk.replication).toBe("çoğaltma");
+    expect(res.affected_count).toBe(3);
+    expect(api.aiCalls).toBe(0);
+
+    const est = await api.estimateTranslate(book.id, { pages: [], blocks: res.affected });
+    expect(est.pages).toEqual([4, 5, 6]);
+    expect(api.aiCalls).toBe(0);
+    await api.translate(book.id, est.confirm_token);
+    expect(api.aiCalls).toBe(1);
+  });
+});

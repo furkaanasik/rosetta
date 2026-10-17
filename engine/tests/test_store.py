@@ -333,3 +333,66 @@ def test_concurrent_first_migrate_is_safe(tmp_path: Path) -> None:
     rows = c.execute("SELECT number, COUNT(*) FROM schema_migrations GROUP BY number").fetchall()
     assert all(count == 1 for _, count in rows)
     c.close()
+
+
+def test_upgrade_006_to_007_keeps_rows_without_unit(tmp_path: Path) -> None:
+    c = sqlite3.connect(tmp_path / "v6.db")
+    for number, _, sql in db._migrations():
+        if number <= 6:
+            c.executescript(sql)
+    c.execute("PRAGMA user_version = 6")
+    c.execute(
+        "INSERT INTO books(id, file_hash, title, page_count, created_at) "
+        "VALUES (1, 'h', 'B', 3, 'now')"
+    )
+    c.execute(
+        "INSERT INTO translations(book_id, page_no, text_hash, lang, provider, model, text, "
+        "sentences_json, sentence_aligned, prompt_version, created_at) "
+        "VALUES (1, 0, 'abc', 'tr', 'p', 'm', 'Eski.', '[\"Eski.\"]', 1, 1, 'now')"
+    )
+    c.commit()
+    c.close()
+    conn = db.connect(tmp_path / "v6.db")
+
+    assert db.migrate(conn) >= 7
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(translations)")}
+    assert {"unit_hash", "unit_role"} <= cols
+    old = Repos.from_conn(conn).translations.for_page(1, 0, "tr", "p", "m")["abc"]
+    assert old.text == "Eski." and old.unit_hash is None and old.unit_role is None
+    conn.close()
+
+
+def test_unit_columns_roundtrip_and_overwrite(repos: Repos, book_id: int) -> None:
+    from dataclasses import replace
+
+    repos.translations.put_rows([_row(book_id, 1, "a")])
+    joined = replace(_row(book_id, 1, "a", "Yeni."), unit_hash="u1", unit_role="tail")
+    repos.translations.put_rows([joined], overwrite=True)
+
+    got = repos.translations.for_page(book_id, 1, LANG, PROVIDER, MODEL)["a"]
+    assert (got.text, got.unit_hash, got.unit_role) == ("Yeni.", "u1", "tail")
+
+
+def test_pairs_for_book_joins_source_blocks(repos: Repos, book_id: int) -> None:
+    para = _block(
+        0, BlockType.PARAGRAPH, "Replication is hard.", sentences=["Replication is hard."]
+    )
+    page = PageBlocks(page_no=3, width=1, height=1, has_text_layer=True, blocks=[para])
+    repos.blocks.replace_page(book_id, page, 3)
+    repos.translations.put_rows([_row(book_id, 3, para.text_hash, "Çoğaltma zordur.")])
+    repos.translations.put_rows([_row(book_id, 4, "orphan")])  # no block: skipped
+
+    (pair,) = repos.translations.pairs_for_book(book_id, LANG, PROVIDER, MODEL)
+    assert (pair.page_no, pair.block_ord, pair.block_type) == (3, 0, "paragraph")
+    assert pair.en_sentences == ["Replication is hard."]
+    assert pair.tr_sentences == ["Çoğaltma zordur."]
+    assert pair.unit_hash is None
+
+
+def test_term_ignores(repos: Repos, book_id: int) -> None:
+    repos.term_ignores.add(book_id, "tr", "leader")
+    repos.term_ignores.add(book_id, "tr", "leader")
+    repos.term_ignores.add(book_id, "de", "node")
+    assert repos.term_ignores.list(book_id, "tr") == {"leader"}
+    repos.term_ignores.remove(book_id, "tr", "leader")
+    assert repos.term_ignores.list(book_id, "tr") == set()

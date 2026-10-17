@@ -1,218 +1,207 @@
 # Rosetta
 
-Kişisel kullanım için bir masaüstü PDF okuyucu. İngilizce bir kitabı açarsınız, sayfaları
-**yalnızca siz istediğinizde** Türkçeye (ya da seçtiğiniz dile) çevirir ve orijinal hiyerarşiyi
-(başlık, paragraf, liste, kod, görsel, tablo) koruyan reflow HTML olarak gösterir. Dört görünüm
-modu vardır: **Orijinal**, **Split** (solda PDF, sağda çeviri, paragraf bazlı senkron kaydırma),
-**Sadece Çeviri** ve **Öğrenme** (orijinal metin, yalnızca bilmediğiniz kelimelerin üstünde Türkçe
-karşılık). Çevrilen kitabı PDF olarak dışa aktarabilir; kelime defteri, offline sözlük ve aralıklı
-tekrar (FSRS) kartlarıyla İngilizce çalışabilirsiniz. Çeviri, makinenizdeki `claude` CLI'ı üzerinden
-**aboneliğinizle** yapılır; API anahtarı kullanılmaz.
+A desktop PDF reader for reading English books in another language. Open a book, and Rosetta
+translates pages into Turkish (or a language you choose) **only when you ask**. It shows the result
+as reflowed HTML that keeps the original structure: headings, paragraphs, lists, code, images and
+tables. You can read in four modes: **Original**, **Side by side** (PDF and translation with synced
+scrolling), **Translation only** and **Learning** (the original text with a Turkish gloss over just
+the words you don't know). You can export the translated book as a PDF, and study English with a
+vocabulary notebook, an offline dictionary and spaced-repetition (FSRS) flashcards. Translation runs
+through the `claude` CLI on your machine, using **your Claude subscription**. No API key is needed.
 
-Linux öncelikli (Tauri 2 + React + PDF.js arayüz, Python motoru sidecar olarak). Lisans: AGPL-3.0-or-later.
+Linux first (Tauri 2 + React + PDF.js front end, Python engine as a sidecar). The user interface is
+in Turkish. License: AGPL-3.0-or-later.
 
-## Temel kurallar
+## Download
 
-1. **Otomatik AI çağrısı yok.** Her AI işlemi (çeviri, kitap analizi, "Bunu açıkla") yalnızca bir
-   butona/komuta basınca çalışır. Prefetch, arka plan çevirisi, açılışta analiz yok.
-2. **Önce tahmin, sonra onay.** Her AI işleminden önce tahmini çağrı/token/$ gösterilir; onaylamadan
-   hiçbir şey çalışmaz (CLI'da onay sorusu, API'de tek kullanımlık onay belirteci).
-3. **Her çeviri cache'lenir.** Aynı sayfa aynı dil + model için ikinci kez çevrilmez (yeniden çeviri
-   yalnızca `--force` ile).
-4. **Font küçültme yok.** Çeviri orijinal punto ve hiyerarşiyle reflow HTML olarak üretilir.
-5. **HTML'i LLM üretmez.** Modele yalnızca metin gider, yalnızca metin döner; HTML'i Rosetta üretir ve
-   modelin çıktısı her yerde escape edilir.
-6. **Kod, görsel, diyagram, tablo, sayfa başlığı/altlığı modele gönderilmez.** Kod blokları monospace
-   font tespitiyle ayrılır; görseller ve tablolar kırpılıp görsel olarak gösterilir.
+Get the latest build from the [Releases](https://github.com/furkaanasik/rosetta/releases) page:
 
-## Kurulum
+- **AppImage** (any distro):
+  ```bash
+  chmod +x Rosetta_0.1.0_amd64.AppImage
+  ./Rosetta_0.1.0_amd64.AppImage
+  # without FUSE:
+  APPIMAGE_EXTRACT_AND_RUN=1 ./Rosetta_0.1.0_amd64.AppImage
+  ```
+- **.deb** (Debian/Ubuntu): `sudo apt install ./Rosetta_0.1.0_amd64.deb`
 
-### Kullanıcı (AppImage / .deb)
+Runtime requirements:
 
-Paketler `packaging/build-app.sh` ile üretilir (bkz. [docs/paketleme.md](docs/paketleme.md)):
+- WebKitGTK: Arch `webkit2gtk-4.1 gtk3`, Debian/Ubuntu `libwebkit2gtk-4.1-0 libgtk-3-0`
+- A logged-in [Claude Code](https://docs.claude.com/en/docs/claude-code) CLI (`claude`) for translation
+- Chromium (`chromium`, `chromium-browser` or `google-chrome`) for PDF export
 
-| Paket | Yol |
-|---|---|
-| AppImage (~163 MB) | `app/src-tauri/target/release/bundle/appimage/Rosetta_0.1.0_amd64.AppImage` |
-| .deb (~68 MB) | `app/src-tauri/target/release/bundle/deb/Rosetta_0.1.0_amd64.deb` |
+## Ground rules
 
-Çalışma zamanı sistem bağımlılıkları (WebKitGTK):
+1. **No automatic AI calls.** Every AI action (translation, book analysis, "Explain this") runs only
+   when you press a button or run a command. No prefetching, no background translation, no analysis
+   on open.
+2. **Estimate first, then confirm.** Before every AI action Rosetta shows the estimated calls, tokens
+   and cost. Nothing runs until you confirm (a prompt in the CLI, a single-use confirm token in the API).
+3. **Every translation is cached.** A page is never translated twice for the same language and model
+   (re-translation only with `--force`).
+4. **No font shrinking.** Translations are reflowed HTML at the original size and hierarchy.
+5. **The LLM never writes HTML.** Only text goes to the model and only text comes back. Rosetta
+   builds the HTML and escapes model output everywhere.
+6. **Code, images, diagrams, tables, running heads and footers are never sent to the model.** Code
+   blocks are detected by monospace fonts; images and tables are cropped and shown as images.
 
-- Arch: `webkit2gtk-4.1 gtk3`
-- Debian/Ubuntu: `libwebkit2gtk-4.1-0 libgtk-3-0`
+## Quick start
 
-Ayrıca çeviri için giriş yapılmış [Claude Code](https://docs.claude.com/en/docs/claude-code) CLI'ı
-(`claude`) gerekir. PDF dışa aktarım için sistemde Chromium (`chromium`, `chromium-browser` ya da
-`google-chrome`) bulunmalıdır. AppImage FUSE olmadan `APPIMAGE_EXTRACT_AND_RUN=1` ile çalıştırılabilir.
+### App
 
-### Geliştirici
+1. Open a book with **Open PDF**.
+2. Pick a view mode in the top bar.
+3. Control panel (everything is manual):
+   - **Analyze book**: builds a book profile (glossary, do-not-translate terms, tone) from the table
+     of contents and a few sample pages. You can edit it in the profile editor.
+   - **Translate this page**, **Translate range** (e.g. `120-140`), **Translate whole book**: an
+     estimate dialog opens, and nothing runs until you press **Confirm**. Ranges and whole books run
+     as a **job** with progress, pause/resume, a budget limit, failed pages and "retry failed only".
+   - **Export PDF**: translation only or bilingual (EN | TR), with translated bookmarks and a table
+     of contents.
+   - **Consistency check**: finds English terms translated in different ways and adds the preferred
+     one to the glossary in one click.
+4. Learning: click a word to see its meaning from the offline dictionary, and save it as unknown to
+   add it to your vocabulary. In Learning mode its Turkish meaning then appears above it everywhere
+   in the book. There are also flashcards (Again/Hard/Good/Easy), a technical-term list and a stats
+   panel. Select a sentence and use **Explain this** (confirmed and cached).
+5. The status bar shows total spend (list-price equivalent).
 
-| Araç | Neden |
-|---|---|
-| [uv](https://docs.astral.sh/uv/) (Python 3.13'ü kendisi kurar) | motor (`engine/`) |
-| Node.js + npm | arayüz (`app/`) |
-| Rust ([`rustup`](https://rustup.rs/)) | Tauri |
-| Chromium | PDF export, E2E testleri |
-
-Tauri derleme bağımlılıkları:
-
-- Arch: `webkit2gtk-4.1 base-devel curl wget file openssl librsvg xdotool`
-- Debian/Ubuntu: `libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev librsvg2-dev`
-
-```bash
-cd engine && uv sync && uv run rosetta --help     # motor + CLI
-cd app && npm ci && scripts/prepare-dev-sidecar.sh && npx tauri dev   # uygulama (geliştirme)
-packaging/build-app.sh                            # sidecar (PyInstaller) + AppImage + .deb
-```
-
-## Hızlı başlangıç
-
-### Uygulama
-
-1. **PDF Aç** ile kitabı açın.
-2. Üst çubuktan görünüm modunu seçin: Orijinal / Split / Sadece Çeviri / Öğrenme.
-3. Kontrol paneli (hepsi elle):
-   - **Kitabı Analiz Et** — içindekiler + birkaç örnek sayfadan kitap profili (sözlük, çevrilmeyecek
-     terimler, ton) çıkarır; profil düzenleme ekranından değiştirilebilir.
-   - **Bu Sayfayı Çevir**, **Aralık Çevir** (ör. `120-140`), **Tüm Kitabı Çevir** — tahmin penceresi
-     açılır, **Onayla** demeden hiçbir şey çalışmaz. Aralık ve tüm kitap bir **iş** olarak çalışır:
-     ilerleme, duraklat/devam, bütçe sınırı, hatalı sayfalar ve "sadece hatalıları tekrar dene".
-   - **PDF Dışa Aktar** — sadece Türkçe ya da iki dilli (EN | TR), Türkçe yer imleri ve İçindekiler.
-4. Öğrenme: bir kelimeye tıklayın → offline sözlükte anlam; "Kaydet (bilmiyorum)" ile kelime defterine
-   ekleyin, Öğrenme modunda kitabın tamamında üstünde Türkçe karşılık görünür. Flashcard'lar
-   (Tekrar/Zor/İyi/Kolay), teknik terim listesi ve istatistik paneli. Bir cümle için **Bunu açıkla**
-   (onaylı, cache'li).
-5. Durum çubuğunda toplam harcama (liste fiyatı eşdeğeri) görünür.
+Shortcuts: `Ctrl+K` command palette, `Ctrl+,` settings. Rosetta reopens a book at the page where
+you left off.
 
 ### CLI
 
-`--pages`: `41`, `41-44`, `41,43,50-52` (1 tabanlı). AI çağıran her komut önce tahmini gösterir ve
-onay sorar; `--yes` onayı atlar, terminal yoksa `--yes` olmadan reddeder.
+`--pages`: `41`, `41-44`, `41,43,50-52` (1-based). Every command that calls AI shows an estimate and
+asks for confirmation first. `--yes` skips the prompt; without a terminal it refuses unless `--yes`
+is given.
 
 ```bash
 cd engine
-B="kitap.pdf"
+B="book.pdf"
 
-# Ayıklama ve tahmin (AI yok, bedava)
-uv run rosetta extract "$B" --pages 25,30,59 --debug     # block tipleri renkli debug HTML
-uv run rosetta estimate "$B" --pages 41-44 [--force] [--profile profil.json] [--think off]
+# Extraction and estimates (no AI, free)
+uv run rosetta extract "$B" --pages 25,30,59 --debug     # colour-coded debug HTML of block types
+uv run rosetta estimate "$B" --pages 41-44 [--force] [--profile profile.json] [--think off]
 
-# Çeviri: tahmin → onay → claude -p → cache → HTML (pNNN.tr.html, pNNN.review.html, index.html)
+# Translate: estimate → confirm → claude -p → cache → HTML (pNNN.tr.html, pNNN.review.html, index.html)
 uv run rosetta translate "$B" --pages 41-44 [--lang tr] [--model sonnet|haiku] [--think off|low|medium|high]
-                         [--profile profil.json] [--force] [--max-budget-usd 0.25] [--open] [--yes]
+                         [--profile profile.json] [--force] [--max-budget-usd 0.25] [--open] [--yes]
 
-# Kitap profili (Faz 2)
-uv run rosetta profile analyze "$B"                  # tek AI çağrısı, onaylı
+# Book profile
+uv run rosetta profile analyze "$B"                  # one AI call, confirmed
 uv run rosetta profile show|export|import "$B" ...
 uv run rosetta profile set "$B" --term "replication=replikasyon" --dnt Kafka [--remove-term X] [--tur …] [--ton …]
 
-# Toplu iş (Faz 4)
+# Batch jobs
 uv run rosetta job start "$B" (--pages 120-140 | --all) [--budget 2.0]
 uv run rosetta job list | status ID | pause ID | resume ID | retry-failed ID | cancel ID
 
-# PDF dışa aktarım (Faz 5, AI yok)
-uv run rosetta export "$B" [--pages …] [--mode tr|bilingual] [--paper a4|letter] [-o çıktı.pdf] [--no-toc-page]
+# Term consistency (no AI)
+uv run rosetta consistency "$B"
 
-# Öğrenme (Faz 6, AI yok)
-uv run rosetta dict build                            # offline sözlük (~520 MB akış, ~3 dk), bir kez
+# PDF export (no AI)
+uv run rosetta export "$B" [--pages …] [--mode tr|bilingual] [--paper a4|letter] [-o out.pdf] [--no-toc-page]
+
+# Learning (no AI)
+uv run rosetta dict build                            # offline dictionary (~520 MB download, ~3 min), once
 uv run rosetta lookup replicated                     # → replicate
 uv run rosetta vocab add WORD --book "$B" --page 59 [--sentence …] [--unknown|--known]
 uv run rosetta vocab list | mark WORD --unknown|--known
-uv run rosetta review                                # sırası gelen kartlar
-uv run rosetta terms "$B" [--add-all]                # profil sözlüğünden teknik terimler
+uv run rosetta review                                # cards that are due
+uv run rosetta terms "$B" [--add-all]                # technical terms from the profile glossary
 uv run rosetta stats
 uv run rosetta learn-html "$B" --pages 25            # pNNN.learn.html
 
-# Bunu açıkla (Faz 7, onaylı, cache'li)
+# Explain this (confirmed, cached)
 uv run rosetta explain "That's all you can hope for." [--book "$B" --page 25] [--model haiku]
 
-# Kullanım ve API sunucusu
+# Usage and API server
 uv run rosetta usage [--book "$B"]
-uv run rosetta serve --port 0                        # stdout'a tek satır {"port", "token"} JSON
+uv run rosetta serve --port 0                        # prints one line of {"port", "token"} JSON
 ```
 
-## Maliyet ve güvenlik
+## Cost and safety
 
-- **Yalnızca `claude` CLI, yalnızca abonelik.** Rosetta `claude -p` çağırır; kimlik doğrulama için
-  `claude` ile bir kez giriş yapın ya da `CLAUDE_CODE_OAUTH_TOKEN` ayarlayın. Doğrudan Anthropic API
-  isteği hiçbir zaman atılmaz.
-- **Alt sürecin ortamı temizlenir:** tüm `ANTHROPIC_*` değişkenleri (API anahtarı, base URL vb.),
-  `CLAUDE_EFFORT`, `CLAUDECODE`, `AI_AGENT`, `CLAUDE_CODE_*` (yalnızca `CLAUDE_CODE_OAUTH_TOKEN`
-  korunur) ve devralınan `MAX_THINKING_TOKENS` çıkarılır. Böylece Rosetta nereden çalıştırılırsa
-  çalıştırılsın aynı davranır ve faturalama API'ye kaymaz.
-- **Önce tahmin + onay her yerde:** CLI onay sorusu; API'de her AI uç noktası, aynı parametrelerle
-  alınmış tek kullanımlık bir `confirm_token` ister (600 sn geçerli, bir kez kullanılır).
-- **Çağrı başı bütçe sınırı:** varsayılan `--max-budget-usd 0.25`; aşılırsa iş durur (çıkış kodu 6).
-  Toplu işlerde ayrıca iş bütçesi (`--budget`).
-- **$ rakamları liste fiyatı eşdeğeridir.** Max/Pro aboneliğinde fatura değildir; asıl sınır aboneliğin
-  kullanım limitidir. Limit gelince iş duraklar (çıkış kodu 4) ve kaldığı yerden devam eder.
-- **Varsayılan model Sonnet.** DDIA kitabında yapılan kör karşılaştırmada (5 sayfa, ~50 cümle) Haiku
-  9 anlam / 15 dil bilgisi / ~21 çeviri kokan ifade hatası yaptı, Sonnet 4 / 0 / 2 — üstelik daha ucuz
-  ($0.051, tek çağrı) çünkü neredeyse hiç gizli düşünme token'ı harcamadı. `--model haiku` daha ucuz ve
-  hızlı taslak seçeneği olarak duruyor. "Bunu açıkla" varsayılan olarak Haiku kullanır.
-- **Düşünme (`--think off|low|medium|high`):** varsayılan medium. Haiku'da düşünme çağrı başına 9k–18k
-  gizli çıktı token'ı harcayabilir; tahmin bunu model bazında ekler (`thinking_output_tokens_per_call`).
-  `--think off` en hızlı ve en ucuz taslaktır.
-- **Sağlam çeviri kaydı:** her batch'in ödenmiş sonucu hemen kaydedilir; `--force` eski çeviriyi ancak
-  yenisi gelince değiştirir. Model çıktısı doğrulanır (JSON, id'ler, cümle sayısı); geçersizse bir kez
-  sıkı modda tekrar denenir, yine olmazsa sayfa "hatalı" işaretlenir.
+- **Only the `claude` CLI, only your subscription.** Rosetta calls `claude -p`. Log in once with
+  `claude` or set `CLAUDE_CODE_OAUTH_TOKEN`. It never sends requests to the Anthropic API directly.
+- **The subprocess environment is cleaned.** All `ANTHROPIC_*` variables (API key, base URL, etc.),
+  `CLAUDE_EFFORT`, `CLAUDECODE`, `AI_AGENT`, `CLAUDE_CODE_*` (except `CLAUDE_CODE_OAUTH_TOKEN`) and an
+  inherited `MAX_THINKING_TOKENS` are removed. Rosetta behaves the same wherever it is launched from,
+  and billing never shifts to the API.
+- **Estimate and confirm everywhere.** The CLI asks; every AI endpoint in the API requires a
+  single-use `confirm_token` obtained with the same parameters (valid for 600 s, used once).
+- **Per-call budget cap:** `--max-budget-usd 0.25` by default; if exceeded the run stops (exit code 6).
+  Batch jobs also have a job budget (`--budget`).
+- **Dollar figures are list-price equivalents.** On a Max/Pro subscription they are not a bill; the
+  real limit is your subscription's usage limit. When it is hit, the job pauses (exit code 4) and can
+  resume where it stopped.
+- **Default model: Sonnet.** In a blind comparison on *Designing Data-Intensive Applications*
+  (5 pages, ~50 sentences), Haiku made 9 meaning / 15 grammar / ~21 translationese errors and Sonnet
+  4 / 0 / 2. Sonnet was also cheaper ($0.051 in one call) because it used almost no hidden thinking
+  tokens. `--model haiku` remains as a cheaper, faster draft option. "Explain this" uses Haiku by default.
+- **Thinking (`--think off|low|medium|high`):** medium by default. With Haiku, thinking can use 9k–18k
+  hidden output tokens per call; the estimate adds this per model (`thinking_output_tokens_per_call`).
+  `--think off` is the fastest and cheapest draft.
+- **Safe translation storage:** each batch's paid result is saved immediately, and `--force` only
+  replaces the old translation once the new one arrives. Model output is validated (JSON, ids, sentence
+  count); if invalid it is retried once in strict mode, and if that fails the page is marked as failed.
 
-## Sağlayıcılar
+## Providers
 
-| Sağlayıcı | Ne | Profil/bağlam | Not |
+| Provider | What | Profile/context | Notes |
 |---|---|---|---|
-| `claude-cli` (varsayılan) | `claude -p`, abonelik girişi | var | model `sonnet` / `haiku` |
-| `deepl` | DeepL API v2 | **yok** (arayüz bunu belirtir) | anahtar `DEEPL_AUTH_KEY` ortam değişkeninde; `:fx` → ücretsiz uç nokta |
-| `ollama` | yerel model, bedava | var | `ollama_url`, `ollama_model` |
-| `fake` | test için, `[TR] …` | — | bedava, ağ yok |
+| `claude-cli` (default) | `claude -p`, subscription login | yes | model `sonnet` / `haiku` |
+| `deepl` | DeepL API v2 | **no** (the UI says so) | key in the `DEEPL_AUTH_KEY` env var; `:fx` → free endpoint |
+| `ollama` | local model, free | yes | `ollama_url`, `ollama_model` |
+| `fake` | for tests, `[TR] …` | — | free, no network |
 
-Ayrıntı: [docs/faz8-saglayicilar.md](docs/faz8-saglayicilar.md).
+## Data and config paths
 
-## Veri ve ayar yolları
-
-| | Linux varsayılanı | Override |
+| | Linux default | Override |
 |---|---|---|
-| Veri (DB, HTML/PDF çıktıları, sözlük) | `~/.local/share/rosetta/` (`rosetta.db`, `out/<hash>/`, `dictionary.db`) | `ROSETTA_DATA_DIR` |
-| Ayarlar | `~/.config/rosetta/config.toml` | `ROSETTA_CONFIG_DIR` |
+| Data (DB, HTML/PDF output, dictionary) | `~/.local/share/rosetta/` (`rosetta.db`, `out/<hash>/`, `dictionary.db`) | `ROSETTA_DATA_DIR` |
+| Settings | `~/.config/rosetta/config.toml` | `ROSETTA_CONFIG_DIR` |
 
-`config.toml` (gösterilen değerler varsayılanlardır; dosya olmadan da çalışır). Çoğu ayar uygulamadaki
-**Ayarlar** ekranından (dişli simgesi ya da `Ctrl+,`) da değiştirilebilir; ekran dosyadaki yorumları ve
-`[pricing.*]` tablolarını korur. Ayarlar → **Motor durumu** bir şey çalışmadığında nedenini gösterir
-(claude bulunamadı, sözlük kurulmamış, Chromium yok…); bu kontroller AI'a istek göndermez.
+`config.toml` (the values shown are the defaults; Rosetta works without the file). Most settings can
+also be changed in the app's **Settings** screen (gear icon or `Ctrl+,`), which keeps comments and the
+`[pricing.*]` tables in the file. Settings → **Engine status** shows why something isn't working
+(claude not found, dictionary not built, no Chromium…). These checks never send anything to the AI.
 
 ```toml
 default_lang = "tr"
 provider = "claude-cli"          # claude-cli | deepl | ollama | fake
-model = "sonnet"                 # çeviri modeli
-explain_model = "haiku"          # "Bunu açıkla"
-batch_max_pages = 5              # bir çağrıda en fazla sayfa
-batch_max_input_tokens = 6000    # bir çağrıda en fazla tahmini input token
+model = "sonnet"                 # translation model
+explain_model = "haiku"          # "Explain this"
+batch_max_pages = 5              # max pages per call
+batch_max_input_tokens = 6000    # max estimated input tokens per call
 claude_timeout_s = 240
-# claude_path = "/home/ben/.local/bin/claude"  # boş: PATH + bilinen kurulum yerleri (otomatik)
+# claude_path = "/home/me/.local/bin/claude"  # empty: PATH + known install locations (automatic)
 claude_effort = "medium"         # claude --effort
-# claude_max_thinking_tokens = 0 # 0 = düşünme kapalı (MAX_THINKING_TOKENS=0)
-claude_max_budget_usd = 0.25     # çağrı başı sınır (claude --max-budget-usd)
-prefetch = false                 # her zaman kapalı (Kural 1)
+# claude_max_thinking_tokens = 0 # 0 = thinking off (MAX_THINKING_TOKENS=0)
+claude_max_budget_usd = 0.25     # per-call cap (claude --max-budget-usd)
+prefetch = false                 # always off (rule 1)
 deepl_auth_key_env = "DEEPL_AUTH_KEY"
 deepl_timeout_s = 60
 ollama_url = "http://localhost:11434"
 ollama_model = "qwen2.5:7b"
 ollama_timeout_s = 600
 
-[pricing.sonnet]   # $ / milyon token (yalnızca tahmin için)
+[pricing.sonnet]   # $ per million tokens (estimates only)
 in = 2.0
 out = 10.0
 [pricing.haiku]
 in = 1.0
 out = 5.0
-[pricing.deepl]    # DeepL karakter başına ücretlendirir (~$25/1M karakter Pro ≈ $90/1M token); ücretsiz anahtar: in = 0
+[pricing.deepl]    # DeepL bills per character (~$25/1M chars Pro ≈ $90/1M tokens); free key: in = 0
 in = 90.0
 out = 0.0
 [pricing.ollama]
 in = 0.0
 out = 0.0
 
-[thinking_output_tokens_per_call.haiku]   # tahmine eklenen gizli düşünme token'ı (çağrı başı)
+[thinking_output_tokens_per_call.haiku]   # hidden thinking tokens added to the estimate (per call)
 low = 13000
 medium = 18000
 high = 24000
@@ -222,49 +211,72 @@ medium = 1500
 high = 6000
 ```
 
-Fiyatı tanımlı olmayan bir model seçilirse tahmin "$0" yerine "fiyat bilinmiyor" der. Bozuk bir
-`config.toml` dosya yoluyla birlikte anlaşılır bir hata verir.
+If you pick a model with no price defined, the estimate says "price unknown" instead of "$0". A broken
+`config.toml` gives a readable error that includes the file path.
 
-## Çıkış kodları
+## Exit codes
 
-| Kod | Anlam |
+| Code | Meaning |
 |---|---|
-| 0 | başarı |
-| 1 | genel hata (ör. `claude` bulunamadı, geçersiz ayar) |
-| 2 | iptal / onay verilmedi / terminal yok ve `--yes` yok |
-| 3 | kısmi hata (bazı sayfalar başarısız) |
-| 4 | kullanım limiti (iş duraklatıldı) |
-| 5 | kimlik doğrulama |
-| 6 | bütçe sınırı aşıldı |
-| 7 | sağlayıcı kullanılamıyor (`claude` yok ya da üst üste 3 hata) |
+| 0 | success |
+| 1 | general error (e.g. `claude` not found, invalid setting) |
+| 2 | cancelled / not confirmed / no terminal and no `--yes` |
+| 3 | partial failure (some pages failed) |
+| 4 | usage limit (job paused) |
+| 5 | authentication |
+| 6 | budget cap exceeded |
+| 7 | provider unavailable (`claude` missing or 3 failures in a row) |
 
-## Proje yapısı
+## Building from source
+
+| Tool | Why |
+|---|---|
+| [uv](https://docs.astral.sh/uv/) (installs Python 3.13 itself) | engine (`engine/`) |
+| Node.js + npm | front end (`app/`) |
+| Rust ([`rustup`](https://rustup.rs/)) | Tauri |
+| Chromium | PDF export, E2E tests |
+
+Tauri build dependencies:
+
+- Arch: `webkit2gtk-4.1 base-devel curl wget file openssl librsvg xdotool`
+- Debian/Ubuntu: `libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev librsvg2-dev`
+
+```bash
+cd engine && uv sync && uv run rosetta --help     # engine + CLI
+cd app && npm ci && scripts/prepare-dev-sidecar.sh && npx tauri dev   # app (development)
+packaging/build-app.sh                            # sidecar (PyInstaller) + AppImage + .deb
+```
+
+Bundles are written to `app/src-tauri/target/release/bundle/{appimage,deb}/`.
+
+## Project layout
 
 ```
 rosetta/
-├── engine/                 Python motoru (rosetta_engine), uv projesi
+├── engine/                 Python engine (rosetta_engine), a uv project
 │   ├── src/rosetta_engine/
-│   │   ├── extract/        PyMuPDF → tipli block'lar, okuma sırası, kod/figür/tablo, ❶ işaretleri
-│   │   ├── store/          SQLite şema (migrations/), repo'lar
-│   │   ├── translate/      prompt, doğrulama, tahmin, claude_cli, deepl, ollama, fake, service
-│   │   ├── render/         HTML üretimi (tr / review / learn / debug)
-│   │   ├── profile/        kitap profili (Faz 2)
-│   │   ├── jobs/           toplu iş (Faz 4)
-│   │   ├── export/         PDF dışa aktarım (Faz 5)
-│   │   ├── learn/          sözlük, kelime defteri, FSRS (Faz 6)
-│   │   ├── explain/        "Bunu açıkla" (Faz 7)
-│   │   ├── api/            FastAPI sidecar (Faz 3)
-│   │   ├── commands/       CLI komut eklentileri
+│   │   ├── extract/        PyMuPDF → typed blocks, reading order, code/figure/table, callout markers
+│   │   ├── store/          SQLite schema (migrations/), repositories
+│   │   ├── translate/      prompt, validation, estimates, claude_cli, deepl, ollama, fake, service
+│   │   ├── quality/        term consistency check
+│   │   ├── render/         HTML output (tr / review / learn / debug)
+│   │   ├── profile/        book profile
+│   │   ├── jobs/           batch jobs
+│   │   ├── export/         PDF export
+│   │   ├── learn/          dictionary, vocabulary, FSRS
+│   │   ├── explain/        "Explain this"
+│   │   ├── api/            FastAPI sidecar
+│   │   ├── commands/       CLI command plugins
 │   │   └── cli.py          Typer CLI
 │   ├── scripts/            build_dictionary.py
 │   └── tests/
-├── app/                    Tauri 2 + React + Vite + PDF.js arayüz (API_CONTRACT.md, e2e/)
-├── packaging/              PyInstaller spec, sidecar ve uygulama derleme betikleri
-├── profiles/ddia.json      örnek kitap profili
-└── docs/                   faz belgeleri
+├── app/                    Tauri 2 + React + Vite + PDF.js front end (API_CONTRACT.md, e2e/)
+├── packaging/              PyInstaller spec, sidecar and app build scripts
+├── profiles/ddia.json      sample book profile
+└── docs/                   design notes (Turkish)
 ```
 
-## Geliştirme
+## Development
 
 ```bash
 cd engine
@@ -273,39 +285,22 @@ uv run pytest -q --cov=rosetta_engine
 
 cd app
 npm run lint && npm run typecheck && npm test
-npm run e2e            # Playwright: gerçek motor (sahte AI) + Vite, sistem Chromium
+npm run e2e            # Playwright: real engine (fake AI) + Vite, system Chromium
 ```
 
-- Testler gerçek `claude`'u hiç çağırmaz; sahte sağlayıcılar ve sahte runner'lar kullanılır.
-- `uv run pytest -m live -q` gerçek `claude` çağrısı yapar (token harcar) — yalnızca açık onayla
-  çalıştırın.
-- Geliştirme için gizli `rosetta serve --dev-fake-ai` anahtarı AI'ı sahte yanıtlarla değiştirir;
-  ortam değişkeniyle açılamaz, paketli uygulama hiçbir zaman kullanmaz.
+- Tests never call the real `claude`; they use fake providers and fake runners.
+- `uv run pytest -m live -q` makes real `claude` calls (spends tokens). Run it only on purpose.
+- The hidden `rosetta serve --dev-fake-ai` flag replaces AI with fake answers for development. It
+  cannot be enabled through an environment variable, and the packaged app never uses it.
 
-## Belgeler
+## Licenses
 
-| Belge | Konu |
-|---|---|
-| [docs/faz2-profil.md](docs/faz2-profil.md) | Kitap profili, `complete()` sözleşmesi |
-| [docs/faz3-api.md](docs/faz3-api.md) | FastAPI sidecar, uç noktalar, onay belirteçleri |
-| [app/API_CONTRACT.md](app/API_CONTRACT.md) | Uygulama ↔ motor API sözleşmesi |
-| [app/README.md](app/README.md) | Arayüz geliştirme |
-| [docs/faz4-toplu-is.md](docs/faz4-toplu-is.md) | Toplu iş, duraklat/devam, bütçe |
-| [docs/faz5-pdf-export.md](docs/faz5-pdf-export.md) | PDF dışa aktarım, yer imleri |
-| [docs/faz6-ogrenme.md](docs/faz6-ogrenme.md) | Sözlük, kelime defteri, FSRS, öğrenme modu |
-| [docs/faz7-acikla.md](docs/faz7-acikla.md) | "Bunu açıkla" |
-| [docs/faz8-saglayicilar.md](docs/faz8-saglayicilar.md) | DeepL ve Ollama |
-| [docs/kalite.md](docs/kalite.md) | Sayfa sonu paragraf devamı, terim tutarlılığı denetimi |
-| [docs/paketleme.md](docs/paketleme.md) | PyInstaller, AppImage, .deb |
-
-## Lisanslar
-
-- **Rosetta:** [AGPL-3.0-or-later](LICENSE). Motor, AGPL-3.0 lisanslı
-  [PyMuPDF](https://pymupdf.readthedocs.io/) kullandığı için depo da AGPL uyumludur.
-- **Sözlük verisi:** İngilizce Wiktionary ([kaikki.org](https://kaikki.org/) çıkarımı),
-  CC BY-SA 4.0 + GFDL; atıf gerekir. Veri depoya **eklenmez**; `rosetta dict build` ile yerelde
-  kurulur (`dictionary.db`, ~157 MB). Kaynak ve lisans `rosetta dict info` ile görülür.
-- **Python bağımlılıkları:** pydantic, typer, rich, jinja2, platformdirs, httpx, fastapi, uvicorn,
-  simplemma, fsrs — MIT/BSD/Apache-2.0.
-- **Arayüz bağımlılıkları:** React (MIT), pdf.js / `pdfjs-dist` (Apache-2.0), Tauri ve eklentileri
+- **Rosetta:** [AGPL-3.0-or-later](LICENSE). The engine uses AGPL-3.0 licensed
+  [PyMuPDF](https://pymupdf.readthedocs.io/), so the repository is AGPL-compatible.
+- **Dictionary data:** English Wiktionary (via [kaikki.org](https://kaikki.org/)), CC BY-SA 4.0 + GFDL;
+  attribution required. The data is **not** in the repository; build it locally with `rosetta dict build`
+  (`dictionary.db`, ~157 MB). Source and license: `rosetta dict info`.
+- **Python dependencies:** pydantic, typer, rich, jinja2, platformdirs, httpx, fastapi, uvicorn,
+  simplemma, fsrs (MIT/BSD/Apache-2.0).
+- **Front-end dependencies:** React (MIT), pdf.js / `pdfjs-dist` (Apache-2.0), Tauri and its plugins
   (MIT/Apache-2.0).
